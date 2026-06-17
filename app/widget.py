@@ -1,5 +1,6 @@
-from PySide6.QtWidgets import QWidget, QPushButton
+from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QPoint
+from PySide6.QtGui import QPainter, QColor, QFont, QPen
 
 from app.chat_panel import ChatPanel
 
@@ -13,10 +14,10 @@ class FloatingWidget(QWidget):
         self.was_dragging = False
 
         self.setup_window()
-        self.create_button()
 
     def setup_window(self):
-        self.setFixedSize(70, 70)
+        # Set a clean size for our circular widget
+        self.setFixedSize(60, 60)
         self.move(1200, 600)
 
         self.setWindowFlags(
@@ -27,50 +28,58 @@ class FloatingWidget(QWidget):
 
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-    def create_button(self):
-        self.button = QPushButton("AI", self)
-        self.button.setFixedSize(60, 60)
-        self.button.move(5, 5)
+    # --- DRAW THE CIRCLE DIRECTLY ON THE WIDGET ---
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
 
-        self.button.setStyleSheet("""
-            QPushButton {
-                background-color: #202123;
-                color: white;
-                border-radius: 30px;
-                font-size: 20px;
-                font-weight: bold;
-                border: 2px solid #10a37f;
-            }
-        """)
+        # Draw the background circle (Matches #202123)
+        painter.setBrush(QColor("#202123"))
+        # Draw the border (Matches 2px #10a37f)
+        painter.setPen(QPen(QColor("#10a37f"), 2))
+        painter.drawEllipse(2, 2, 56, 56)
 
-        self.button.clicked.connect(self.open_chat)
-
+        # Draw the "AI" text
+        painter.setPen(QColor("white"))
+        font = QFont("Arial", 15, QFont.Bold)
+        painter.setFont(font)
+        painter.drawText(self.rect(), Qt.AlignCenter, "AI")
 
     def open_chat(self):
-        # get bubble position
         bubble_x = self.x()
         bubble_y = self.y()
 
-        #put chat panel slightly above bubble
-        self.chat_panel.move(bubble_x - 350, bubble_y - 450)
+        # Target coordinates
+        target_x = bubble_x - 350
+        target_y = bubble_y - 450 
 
-        #show chat panel
+        if target_y < 10:
+            target_y = bubble_y + self.height() + 10
+
+        # Also prevent it from clipping past the left side of the screen
+        if target_x < 10:
+            target_x = 10
+
+        # Move and display the panel safely
+        self.chat_panel.move(target_x, target_y)
         self.chat_panel.show()
         self.chat_panel.raise_()
-
-        #hide bubble while chat is open
         self.hide()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.drag_position = event.globalPosition().toPoint() - self.pos()
+            self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self.was_dragging = False
+            event.accept()
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:
             self.was_dragging = True
             self.move(event.globalPosition().toPoint() - self.drag_position)
+            event.accept()
 
     def mouseReleaseEvent(self, event):
-        if not self.was_dragging:
-            self.open_chat()
+        if event.button() == Qt.LeftButton:
+            if not self.was_dragging:
+                self.open_chat()
+            event.accept()
