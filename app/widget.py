@@ -1,6 +1,7 @@
+import os
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QPainter, QColor, QFont, QPen
+from PySide6.QtGui import QPainter, QColor, QPixmap, QPainterPath
 from PySide6.QtCore import Qt, QPoint, QRect
 from app.animation_window import AnimationWindow
 
@@ -37,29 +38,30 @@ class FloatingWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-    def paintEvent(self, event):
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QColor("#202123"))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(2, 2, 56, 56)
 
-            # Draw the background circle (Matches #202123)
-            painter.setBrush(QColor("#202123"))
-            painter.setPen(Qt.NoPen)  # This removes the green outline
-            painter.drawEllipse(2, 2, 56, 56)
+        logo_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets",
+            "logo.png"
+        )
 
-            logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "logo.png")
-            logo = QPixmap(logo_path)
+        logo = QPixmap(logo_path)
 
-            # 3. Create a circular path
-            circular_path = QPainterPath()
-            circular_path.addEllipse(QRect(2, 2, 56, 56))
+        circular_path = QPainterPath()
+        circular_path.addEllipse(2, 2, 56, 56)
+        painter.setClipPath(circular_path)
 
-            # 4. Enable clipping to the circle
-            painter.setClipPath(circular_path)
-
-            # 5. Draw the logo (now it will be clipped to circle)
-            if not logo.isNull():
-                scaled_logo = logo.scaled(56, 56, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                painter.drawPixmap(2, 2, scaled_logo)
+        if not logo.isNull():
+            scaled_logo = logo.scaled(
+                56,
+                56,
+                Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation
+            )
+            painter.drawPixmap(2, 2, scaled_logo)
 
 
     def open_chat(self):
