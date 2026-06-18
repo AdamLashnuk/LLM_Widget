@@ -1,6 +1,8 @@
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QPainter, QColor, QFont, QPen
+from PySide6.QtCore import Qt, QPoint, QRect
+from app.animation_window import AnimationWindow
 
 from app.chat_panel import ChatPanel
 
@@ -12,6 +14,8 @@ class FloatingWidget(QWidget):
         self.chat_panel = ChatPanel(self)
         self.drag_position = QPoint()
         self.was_dragging = False
+        self.animation_window = AnimationWindow()
+        self.animation_window.finished.connect(self.show_chat_panel_after_animation)
 
         self.setup_window()
 
@@ -49,33 +53,34 @@ class FloatingWidget(QWidget):
         bubble_x = self.x()
         bubble_y = self.y()
 
-        # Initial target coordinates
         target_x = bubble_x - 350
-        target_y = bubble_y - 450 
+        target_y = bubble_y - 450
 
-        # Get the dimensions of the monitor the widget is currently on
-        screen = self.screen().availableGeometry()
-        panel_w = self.chat_panel.width()
-        panel_h = self.chat_panel.height()
-        
-        # Prevent it from clipping past the edges of the screen and make the chat panel open flushly against the edges of the screen
-        if target_y < screen.top():
-            target_y = screen.top()
-            
-        if target_y + panel_h > screen.bottom():
-            target_y = screen.bottom() - panel_h
+        if target_y < 10:
+            target_y = bubble_y + self.height() + 10
 
-        if target_x < screen.left():
-            target_x = screen.left()
+        if target_x < 10:
+            target_x = 10
 
-        if target_x + panel_w > screen.right():
-            target_x = screen.right() - panel_w
+        self.final_chat_x = target_x
+        self.final_chat_y = target_y
 
-        # Move and display the panel safely
-        self.chat_panel.move(target_x, target_y)
-        self.chat_panel.show()
-        self.chat_panel.raise_()
+        start_rect = QRect(
+            self.x(),
+            self.y(),
+            self.width(),
+            self.height()
+        )
+
+        end_rect = QRect(
+            target_x,
+            target_y,
+            self.chat_panel.width(),
+            self.chat_panel.height()
+        )
+
         self.hide()
+        self.animation_window.grow_from_to(start_rect, end_rect)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -94,3 +99,8 @@ class FloatingWidget(QWidget):
             if not self.was_dragging:
                 self.open_chat()
             event.accept()
+
+    def show_chat_panel_after_animation(self):
+        self.chat_panel.move(self.final_chat_x, self.final_chat_y)
+        self.chat_panel.show()
+        self.chat_panel.raise_()
