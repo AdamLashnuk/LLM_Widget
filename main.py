@@ -15,4 +15,4 @@ widget = FloatingWidget()
 widget.show()
 
 # Keep the app running
-sys.exit(app.exec())
+sys.exit(app.exec())    

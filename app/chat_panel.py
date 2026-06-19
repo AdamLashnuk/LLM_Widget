@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QRubberBand)
-from PySide6.QtCore import Qt, QUrl, QSize, QTimer
+from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QCursor
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
@@ -23,11 +23,11 @@ class ChatPanel(QWidget):
         # Raw mouse-move events can fire far faster than the browser can
         # re-layout/re-paint. Instead of resizing the window on every single
         # event, we just store the latest target geometry and let a timer
-        # apply it at a steady ~60fps. This keeps the drag feeling live
+        # apply it at a steady ~200fps. This keeps the drag feeling live
         # while coalescing bursts of mouse events into one resize per frame.
         self.pending_geometry = None
         self.resize_timer = QTimer(self)
-        self.resize_timer.setInterval(16)  # ~60fps
+        self.resize_timer.setInterval(5)  # ~200 fps 16 is ~60 fps
         self.resize_timer.timeout.connect(self.apply_pending_geometry)
 
         self.setup_window()
@@ -44,7 +44,15 @@ class ChatPanel(QWidget):
 
     def setup_window(self):
         self.setMinimumSize(400, 400) # Prevents the window from crashing if made too small
-        self.resize(900, 700)
+        
+        # Initialize QSettings and load the saved size
+        self.settings = QSettings("MyLLMWidget", "ChatPanel")
+        saved_size = self.settings.value("window_size")
+        
+        if saved_size:
+            self.resize(saved_size)
+        else:
+            self.resize(900, 700) # Default fallback size
 
         self.setWindowFlags(
             Qt.FramelessWindowHint |
@@ -252,6 +260,11 @@ class ChatPanel(QWidget):
             self.bubble.close_chat_with_animation()
         else:
             self.hide()
+
+    def hideEvent(self, event):
+            # Automatically save the current size to QSettings whenever the panel disappear. The reason why im not putting this in close_panel is because close_panel only works if the user presses on the x button, hideEvent works on any type of close.
+            self.settings.setValue("window_size", self.size())
+            super().hideEvent(event)
 
     def open_settings(self):
             if self.setting_panel.isVisible():
