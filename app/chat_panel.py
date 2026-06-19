@@ -6,17 +6,27 @@ from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWidgets import QGraphicsOpacityEffect
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 import os
+from app.setting_panel import SettingPanel
+from PySide6.QtWidgets import QSizePolicy
 
 class ChatPanel(QWidget):
     def __init__(self, bubble=None):
         super().__init__()
+
         self.bubble = bubble
         self.drag_position = None
+
         self.setup_window()
         self.create_widgets()
+
+        self.setting_panel = SettingPanel()
+        self.setting_panel.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+        self.setting_panel.hide()
+
         self.create_layout()
-
-
 
     def setup_window(self):
         self.setFixedSize(900, 700)
@@ -111,6 +121,7 @@ class ChatPanel(QWidget):
         self.close_button.setFixedSize(32, 32)
         self.close_button.clicked.connect(self.close_panel)
 
+
         # Add button
         self.add_button = QPushButton("+")
         self.add_button.setObjectName("addButton")
@@ -120,7 +131,7 @@ class ChatPanel(QWidget):
         self.settings_button = QPushButton()
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setFixedSize(32, 32)
-
+        self.settings_button.clicked.connect(self.open_settings)
         # Load and recolor the gear icon
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         icon_path = os.path.join(project_root, "assets", "gearsettings.png")
@@ -165,6 +176,8 @@ class ChatPanel(QWidget):
         top_bar.addWidget(self.claude_button)
         top_bar.addWidget(self.gemini_button)
         top_bar.addWidget(self.add_button)
+
+
         top_bar.addStretch()
         top_bar.addWidget(self.settings_button)
         top_bar.addWidget(self.close_button, alignment=Qt.AlignVCenter)
@@ -173,7 +186,23 @@ class ChatPanel(QWidget):
         container_layout.setContentsMargins(12, 12, 12, 12)
         self.title_bar.setLayout(top_bar)
         container_layout.addWidget(self.title_bar)
-        container_layout.addWidget(self.browser)
+
+
+
+        self.content_area = QFrame()
+
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
+        content_layout.addWidget(self.browser)
+        content_layout.addWidget(self.setting_panel)
+
+        self.content_area.setLayout(content_layout)
+
+        container_layout.addWidget(self.content_area)
+
+
+        self.setting_panel.hide()
 
         self.container.setLayout(container_layout)
 
@@ -182,6 +211,10 @@ class ChatPanel(QWidget):
         main_layout.addWidget(self.container)
 
         self.setLayout(main_layout)
+
+    def show_browser(self):
+        self.setting_panel.hide()
+        self.browser.show()
 
     def open_chatgpt(self):
         self.browser.setUrl(QUrl("https://chatgpt.com"))
@@ -213,3 +246,11 @@ class ChatPanel(QWidget):
                 - self.drag_position
             )
             event.accept()
+
+    def open_settings(self):
+        if self.setting_panel.isVisible():
+            self.setting_panel.hide()
+            self.browser.show()
+        else:
+            self.browser.hide()
+            self.setting_panel.show()
