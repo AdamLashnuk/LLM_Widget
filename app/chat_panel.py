@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QFrame)
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, QSize
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 import os
@@ -58,7 +59,10 @@ class ChatPanel(QWidget):
                 background-color: transparent;
                 border: none;
                 color: #b4b4b4;
-                font-size: 28px;
+                font-size: 16px; 
+                font-weight: 100;
+                padding: 0px; 
+                margin: 0px;
             }
 
             QPushButton#closeButton:hover {
@@ -66,14 +70,28 @@ class ChatPanel(QWidget):
                 background-color: #333333;
                 border-radius: 8px;
             }
+                           
+            QPushButton#addButton {
+                font-size: 20px;
+                font-weight: bold;
+                padding: 0px;
+                padding-bottom: 6px; 
+            }
+
+            QPushButton#settingsButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 8px;
+            }
+
+            QPushButton#settingsButton:hover {
+                background-color: #333333;
+            }
         """)
 
     def create_widgets(self):
         self.container = QFrame()
         self.container.setObjectName("mainContainer")
-
-        self.title = QLabel("AI Browser")
-        self.title.setObjectName("title")
 
         self.chatgpt_button = QPushButton("ChatGPT")
         self.claude_button = QPushButton("Claude")
@@ -83,18 +101,41 @@ class ChatPanel(QWidget):
         self.claude_button.clicked.connect(self.open_claude)
         self.gemini_button.clicked.connect(self.open_gemini)
 
-        self.close_button = QPushButton("×")
+        self.close_button = QPushButton("✕")
         self.close_button.setObjectName("closeButton")
-        self.close_button.setFixedSize(50, 50)
+        self.close_button.setFixedSize(32, 32)
         self.close_button.clicked.connect(self.close_panel)
+
+        # Add button
+        self.add_button = QPushButton("+")
+        self.add_button.setObjectName("addButton")
+        self.add_button.setFixedSize(26, 26)
+
+        # Settings button
+        self.settings_button = QPushButton()
+        self.settings_button.setObjectName("settingsButton")
+        self.settings_button.setFixedSize(32, 32)
+
+        # Load and recolor the gear icon
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        icon_path = os.path.join(project_root, "assets", "gearsettings.png")
+        
+        icon_pixmap = QPixmap(icon_path)
+        if not icon_pixmap.isNull():
+            painter = QPainter(icon_pixmap)
+            # This line allows us to draw over the non-transparent parts of the PNG
+            painter.setCompositionMode(QPainter.CompositionMode_SourceIn) 
+            painter.fillRect(icon_pixmap.rect(), QColor("#b4b4b4"))
+            painter.end()
+            
+            self.settings_button.setIcon(QIcon(icon_pixmap))
+            self.settings_button.setIconSize(QSize(20, 20))
 
         # Persistent logins stored in a local folder
         self.browser = QWebEngineView()
         
         self.profile = QWebEngineProfile("llm_profile", self.browser)
-        self.profile = QWebEngineProfile("llm_profile", self.browser)
         self.profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         storage_path = os.path.join(project_root, "session_data")
@@ -110,17 +151,19 @@ class ChatPanel(QWidget):
     def create_layout(self):
         top_bar = QHBoxLayout()
         self.title_bar = QFrame()
-        self.title_bar.setFixedHeight(60)
+        self.title_bar.setFixedHeight(45)
 
-        top_bar.setContentsMargins(18, 14, 18, 8)
+        top_bar.setContentsMargins(18, 4, 18, 4)
+        
+        top_bar.setAlignment(Qt.AlignVCenter)
 
-        top_bar.addWidget(self.title)
-        top_bar.addSpacing(12)
         top_bar.addWidget(self.chatgpt_button)
         top_bar.addWidget(self.claude_button)
         top_bar.addWidget(self.gemini_button)
+        top_bar.addWidget(self.add_button)
         top_bar.addStretch()
-        top_bar.addWidget(self.close_button)
+        top_bar.addWidget(self.settings_button)
+        top_bar.addWidget(self.close_button, alignment=Qt.AlignVCenter)
 
         container_layout = QVBoxLayout()
         container_layout.setContentsMargins(12, 12, 12, 12)
@@ -152,13 +195,12 @@ class ChatPanel(QWidget):
             self.bubble.show()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton and event.position().y() < 45:
             self.drag_position = (
                 event.globalPosition().toPoint()
                 - self.frameGeometry().topLeft()
             )
             event.accept()
-
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:

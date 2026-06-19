@@ -35,7 +35,7 @@ class FloatingWidget(QWidget):
         self.setAttribute(Qt.WA_Hover)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-    # --- DRAW THE CIRCLE DIRECTLY ON THE WIDGET ---
+    # Draw the circle directly on the widget
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
