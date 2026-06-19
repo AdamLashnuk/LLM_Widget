@@ -4,7 +4,8 @@ from PySide6.QtGui import QPainter, QColor
 
 
 class AnimationWindow(QWidget):
-    finished = Signal()
+    open_finished = Signal()
+    close_finished = Signal()
 
     def __init__(self):
         super().__init__()
@@ -20,13 +21,17 @@ class AnimationWindow(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
-        painter.setBrush(QColor("#212121"))
+        painter.setBrush(QColor(15, 15, 15, 220))
         painter.setPen(Qt.NoPen)
-
         painter.drawRoundedRect(self.rect(), 24, 24)
 
     def grow_from_to(self, start_rect, end_rect):
+        self.run_animation(start_rect, end_rect, self.finish_open)
+
+    def shrink_from_to(self, start_rect, end_rect):
+        self.run_animation(start_rect, end_rect, self.finish_close)
+
+    def run_animation(self, start_rect, end_rect, finished_function):
         self.setGeometry(start_rect)
         self.show()
         self.raise_()
@@ -36,10 +41,13 @@ class AnimationWindow(QWidget):
         self.animation.setStartValue(start_rect)
         self.animation.setEndValue(end_rect)
         self.animation.setEasingCurve(QEasingCurve.OutCubic)
-
-        self.animation.finished.connect(self.finish_animation)
+        self.animation.finished.connect(finished_function)
         self.animation.start()
 
-    def finish_animation(self):
+    def finish_open(self):
         self.hide()
-        self.finished.emit()
+        self.open_finished.emit()
+
+    def finish_close(self):
+        self.hide()
+        self.close_finished.emit()

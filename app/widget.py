@@ -18,7 +18,8 @@ class FloatingWidget(QWidget):
         self.drag_position = QPoint()
         self.was_dragging = False
         self.animation_window = AnimationWindow()
-        self.animation_window.finished.connect(self.show_chat_panel_after_animation)
+        self.animation_window.open_finished.connect(self.show_chat_panel_after_animation)
+        self.animation_window.close_finished.connect(self.show_bubble_after_animation)
 
         self.setup_window()
 
@@ -139,8 +140,10 @@ class FloatingWidget(QWidget):
 
     def show_chat_panel_after_animation(self):
         self.chat_panel.move(self.final_chat_x, self.final_chat_y)
+        self.chat_panel.browser.show()
         self.chat_panel.show()
         self.chat_panel.raise_()
+
 
     def enterEvent(self, event):
         self.is_hovered = True
@@ -149,3 +152,25 @@ class FloatingWidget(QWidget):
     def leaveEvent(self, event):
         self.is_hovered = False
         self.update()
+
+    def close_chat_with_animation(self):
+        start_rect = QRect(
+            self.chat_panel.x(),
+            self.chat_panel.y(),
+            self.chat_panel.width(),
+            self.chat_panel.height()
+        )
+
+        end_rect = QRect(
+            self.x(),
+            self.y(),
+            self.width(),
+            self.height()
+        )
+        self.chat_panel.browser.hide()
+        self.chat_panel.hide()
+        self.animation_window.shrink_from_to(start_rect, end_rect)
+
+    def show_bubble_after_animation(self):
+        self.show()
+        self.raise_()

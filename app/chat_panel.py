@@ -3,6 +3,8 @@ from PySide6.QtCore import Qt, QUrl, QSize
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
+from PySide6.QtWidgets import QGraphicsOpacityEffect
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 import os
 
 class ChatPanel(QWidget):
@@ -13,6 +15,8 @@ class ChatPanel(QWidget):
         self.setup_window()
         self.create_widgets()
         self.create_layout()
+
+
 
     def setup_window(self):
         self.setFixedSize(900, 700)
@@ -33,7 +37,8 @@ class ChatPanel(QWidget):
             }
 
             QFrame#mainContainer {
-                background-color: #212121;
+                background-color: rgba(15, 15, 15, 180);
+                border: 1px solid rgba(255, 255, 255, 20);
                 border-radius: 24px;
             }
 
@@ -133,9 +138,8 @@ class ChatPanel(QWidget):
 
         # Persistent logins stored in a local folder
         self.browser = QWebEngineView()
-        
+
         self.profile = QWebEngineProfile("llm_profile", self.browser)
-        self.profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         storage_path = os.path.join(project_root, "session_data")
@@ -189,10 +193,10 @@ class ChatPanel(QWidget):
         self.browser.setUrl(QUrl("https://gemini.google.com"))
 
     def close_panel(self):
-        self.hide()
-
         if self.bubble:
-            self.bubble.show()
+            self.bubble.close_chat_with_animation()
+        else:
+            self.hide()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and event.position().y() < 45:
