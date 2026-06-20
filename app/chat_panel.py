@@ -1,13 +1,13 @@
-from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QRubberBand)
-from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings
+import os
+from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel,
+                               QFrame, QRubberBand, QGraphicsOpacityEffect, QSizePolicy)
+from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QCursor
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
-from PySide6.QtWidgets import QGraphicsOpacityEffect
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve
-import os
+
 from app.setting_panel import SettingPanel
-from PySide6.QtWidgets import QSizePolicy
+
 
 class ChatPanel(QWidget):
     def __init__(self, bubble=None):
@@ -20,17 +20,14 @@ class ChatPanel(QWidget):
         self.resize_direction = None  # Tracks which edge or corner is being pulled
 
         # --- Resize throttling ---
-        # Raw mouse-move events can fire far faster than the browser can
-        # re-layout/re-paint. Instead of resizing the window on every single
-        # event, we just store the latest target geometry and let a timer
-        # apply it at a steady ~200fps. This keeps the drag feeling live
-        # while coalescing bursts of mouse events into one resize per frame.
         self.pending_geometry = None
         self.resize_timer = QTimer(self)
-        self.resize_timer.setInterval(5)  # ~200 fps 16 is ~60 fps
+        self.resize_timer.setInterval(5)  # ~200 fps
         self.resize_timer.timeout.connect(self.apply_pending_geometry)
 
         self.setup_window()
+
+        # 1. THIS MUST COME FIRST: It creates self.chatgpt_button, etc.
         self.create_widgets()
 
         self.setting_panel = SettingPanel()
@@ -40,16 +37,20 @@ class ChatPanel(QWidget):
         )
         self.setting_panel.hide()
 
+        # Listen for the signal from the settings panel
+        self.setting_panel.color_changed.connect(self.update_content_area_color)
+
+        # 2. THIS MUST COME LAST: It puts the widgets into the layout
         self.create_layout()
 
     def setup_window(self):
         self.setMinimumSize(400, 400) # Prevents the window from crashing if made too small
-
+        
         # Initialize QSettings and load the saved size
         self.settings = QSettings("MyLLMWidget", "ChatPanel")
         self.current_provider = self.settings.value("current_provider", "chatgpt")
         saved_size = self.settings.value("window_size")
-
+        
         if saved_size:
             self.resize(saved_size)
         else:
@@ -129,8 +130,8 @@ class ChatPanel(QWidget):
                 background-color: #333333;
             }
             
-            QFrame#contentArea {
-                background-color: transparent; /* Solid color hides the Chromium lag tear */
+            QFrame#contentArea { 
+                background-color: transparent;
                 border-radius: 12px;
             }
         """)
@@ -165,6 +166,7 @@ class ChatPanel(QWidget):
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setFixedSize(32, 32)
         self.settings_button.clicked.connect(self.open_settings)
+
         # Load and recolor the gear icon
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         icon_path = os.path.join(project_root, "assets", "gearsettings.png")
@@ -230,18 +232,19 @@ class ChatPanel(QWidget):
         self.content_area = QFrame()
         self.content_area.setObjectName("contentArea")
 
+        # Load the saved color
+        saved_color = self.settings.value("resize_color", "transparent")
+        self.content_area.setStyleSheet(f"QFrame#contentArea {{ background-color: {saved_color}; border-radius: 12px; }}")
+
         content_layout = QVBoxLayout()
         content_layout.setContentsMargins(0, 0, 0, 0)
-
         content_layout.addWidget(self.browser)
         content_layout.addWidget(self.setting_panel)
 
         self.content_area.setLayout(content_layout)
-
         container_layout.addWidget(self.content_area)
 
         self.setting_panel.hide()
-
         self.container.setLayout(container_layout)
 
         main_layout = QVBoxLayout()
@@ -278,18 +281,23 @@ class ChatPanel(QWidget):
         else:
             self.hide()
 
+    def update_content_area_color(self, new_color):
+        self.content_area.setStyleSheet(f"QFrame#contentArea {{ background-color: {new_color}; border-radius: 12px; }}")
+        # Save the new color so it persists after the app closes
+        self.settings.setValue("resize_color", new_color)
+
     def hideEvent(self, event):
-            # Automatically save the current size to QSettings whenever the panel disappear. The reason why im not putting this in close_panel is because close_panel only works if the user presses on the x button, hideEvent works on any type of close.
-            self.settings.setValue("window_size", self.size())
-            super().hideEvent(event)
+        # Automatically save the current size to QSettings whenever the panel disappears.
+        self.settings.setValue("window_size", self.size())
+        super().hideEvent(event)
 
     def open_settings(self):
-            if self.setting_panel.isVisible():
-                self.setting_panel.hide()
-                self.browser.show()
-            else:
-                self.browser.hide()
-                self.setting_panel.show()
+        if self.setting_panel.isVisible():
+            self.setting_panel.hide()
+            self.browser.show()
+        else:
+            self.browser.hide()
+            self.setting_panel.show()
     
     # Resize logic
     def get_resize_direction(self, pos):
