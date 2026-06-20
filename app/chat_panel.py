@@ -1,13 +1,13 @@
-from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QRubberBand)
-from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings
+import os
+from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel, 
+                               QFrame, QRubberBand, QGraphicsOpacityEffect, QSizePolicy)
+from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QCursor
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
-from PySide6.QtWidgets import QGraphicsOpacityEffect
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve
-import os
+
 from app.setting_panel import SettingPanel
-from PySide6.QtWidgets import QSizePolicy
+
 
 class ChatPanel(QWidget):
     def __init__(self, bubble=None):
@@ -20,18 +20,15 @@ class ChatPanel(QWidget):
         self.resize_direction = None  # Tracks which edge or corner is being pulled
 
         # --- Resize throttling ---
-        # Raw mouse-move events can fire far faster than the browser can
-        # re-layout/re-paint. Instead of resizing the window on every single
-        # event, we just store the latest target geometry and let a timer
-        # apply it at a steady ~200fps. This keeps the drag feeling live
-        # while coalescing bursts of mouse events into one resize per frame.
         self.pending_geometry = None
         self.resize_timer = QTimer(self)
-        self.resize_timer.setInterval(5)  # ~200 fps 16 is ~60 fps
+        self.resize_timer.setInterval(5)  # ~200 fps
         self.resize_timer.timeout.connect(self.apply_pending_geometry)
 
         self.setup_window()
-        self.create_widgets()
+        
+        # 1. THIS MUST COME FIRST: It creates self.chatgpt_button, etc.
+        self.create_widgets() 
 
         self.setting_panel = SettingPanel()
         self.setting_panel.setSizePolicy(
@@ -40,6 +37,10 @@ class ChatPanel(QWidget):
         )
         self.setting_panel.hide()
 
+        # Listen for the signal from the settings panel
+        self.setting_panel.color_changed.connect(self.update_content_area_color)
+
+        # 2. THIS MUST COME LAST: It puts the widgets into the layout
         self.create_layout()
 
     def setup_window(self):
@@ -128,8 +129,8 @@ class ChatPanel(QWidget):
                 background-color: #333333;
             }
             
-            QFrame#contentArea {
-                background-color: transparent; /* Solid color hides the Chromium lag tear */
+            QFrame#contentArea { 
+                background-color: transparent;
                 border-radius: 12px;
             }
         """)
@@ -153,7 +154,6 @@ class ChatPanel(QWidget):
         self.close_button.setFixedSize(32, 32)
         self.close_button.clicked.connect(self.close_panel)
 
-
         # Add button
         self.add_button = QPushButton("+")
         self.add_button.setObjectName("addButton")
@@ -164,6 +164,7 @@ class ChatPanel(QWidget):
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setFixedSize(32, 32)
         self.settings_button.clicked.connect(self.open_settings)
+        
         # Load and recolor the gear icon
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         icon_path = os.path.join(project_root, "assets", "gearsettings.png")
@@ -181,35 +182,27 @@ class ChatPanel(QWidget):
 
         # Persistent logins stored in a local folder
         self.browser = QWebEngineView()
-
         self.profile = QWebEngineProfile("llm_profile", self.browser)
 
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         storage_path = os.path.join(project_root, "session_data")
-        
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
         
         self.page = QWebEnginePage(self.profile, self.browser)
         self.browser.setPage(self.page)
-        
         self.browser.setUrl(QUrl("https://chatgpt.com"))
 
     def create_layout(self):
         top_bar = QHBoxLayout()
         self.title_bar = QFrame()
         self.title_bar.setFixedHeight(45)
-
         top_bar.setContentsMargins(18, 4, 18, 4)
-        
         top_bar.setAlignment(Qt.AlignVCenter)
 
         top_bar.addWidget(self.chatgpt_button)
         top_bar.addWidget(self.claude_button)
         top_bar.addWidget(self.gemini_button)
         top_bar.addWidget(self.add_button)
-
-
         top_bar.addStretch()
         top_bar.addWidget(self.settings_button)
         top_bar.addWidget(self.close_button, alignment=Qt.AlignVCenter)
@@ -222,18 +215,19 @@ class ChatPanel(QWidget):
         self.content_area = QFrame()
         self.content_area.setObjectName("contentArea")
 
+        # Load the saved color
+        saved_color = self.settings.value("resize_color", "transparent")
+        self.content_area.setStyleSheet(f"QFrame#contentArea {{ background-color: {saved_color}; border-radius: 12px; }}")
+
         content_layout = QVBoxLayout()
         content_layout.setContentsMargins(0, 0, 0, 0)
-
         content_layout.addWidget(self.browser)
         content_layout.addWidget(self.setting_panel)
 
         self.content_area.setLayout(content_layout)
-
         container_layout.addWidget(self.content_area)
 
         self.setting_panel.hide()
-
         self.container.setLayout(container_layout)
 
         main_layout = QVBoxLayout()
@@ -261,18 +255,23 @@ class ChatPanel(QWidget):
         else:
             self.hide()
 
+    def update_content_area_color(self, new_color):
+        self.content_area.setStyleSheet(f"QFrame#contentArea {{ background-color: {new_color}; border-radius: 12px; }}")
+        # Save the new color so it persists after the app closes
+        self.settings.setValue("resize_color", new_color)
+
     def hideEvent(self, event):
-            # Automatically save the current size to QSettings whenever the panel disappear. The reason why im not putting this in close_panel is because close_panel only works if the user presses on the x button, hideEvent works on any type of close.
-            self.settings.setValue("window_size", self.size())
-            super().hideEvent(event)
+        # Automatically save the current size to QSettings whenever the panel disappears.
+        self.settings.setValue("window_size", self.size())
+        super().hideEvent(event)
 
     def open_settings(self):
-            if self.setting_panel.isVisible():
-                self.setting_panel.hide()
-                self.browser.show()
-            else:
-                self.browser.hide()
-                self.setting_panel.show()
+        if self.setting_panel.isVisible():
+            self.setting_panel.hide()
+            self.browser.show()
+        else:
+            self.browser.hide()
+            self.setting_panel.show()
     
     # Resize logic
     def get_resize_direction(self, pos):
@@ -320,22 +319,11 @@ class ChatPanel(QWidget):
                 self.initial_global_pos = event.globalPosition().toPoint()
                 self.pending_geometry = None
 
-                # The browser is a separate Chromium process — hiding/disabling
-                # it doesn't stop it from re-rendering on every resize. So
-                # instead we swap it out for the solid content_area background
-                # for the duration of the drag, and only show it again once
-                # the resize is finished and the timer has stopped.
-                # if you want the browser to be visible during resizing, change .hide() to .show().
                 self.browser.hide()
-
                 self.resize_timer.start()
 
                 event.accept()
             else:
-                # Dynamic dragging
-                # Any click that wasn't on a corner (resize), a button, or the browser 
-                # will fall to here. This dynamically makes the entire top bar 
-                # draggable without any hardcoded numbers.
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 event.accept()
 
@@ -347,48 +335,36 @@ class ChatPanel(QWidget):
             return
 
         if self.resize_direction:
-            # Calculate exactly how many pixels the mouse has traveled since clicking
             delta = event.globalPosition().toPoint() - self.initial_global_pos
             geom = self.initial_geometry
             
-            # Start with current dimensions as base
             left, top, width, height = geom.left(), geom.top(), geom.width(), geom.height()
             min_w, min_h = self.minimumWidth(), self.minimumHeight()
 
-            # --- PRECISE DIRECTION MATH ---
-            # Right Edge / Bottom Right / Top Right
             if self.resize_direction in (Qt.RightSection, Qt.BottomRightSection, Qt.TopRightSection):
                 width = max(min_w, geom.width() + delta.x())
                 
-            # Bottom Edge / Bottom Right / Bottom Left
             if self.resize_direction in (Qt.BottomSection, Qt.BottomRightSection, Qt.BottomLeftSection):
                 height = max(min_h, geom.height() + delta.y())
 
-            # Top Edge / Top Left
             if self.resize_direction in (Qt.TopSection, Qt.TopLeftSection):
                 max_delta_y = geom.height() - min_h
                 actual_delta_y = min(delta.y(), max_delta_y)
                 top = geom.top() + actual_delta_y
                 height = geom.height() - actual_delta_y
 
-            # Left Edge / Top Left / Bottom Left
             if self.resize_direction in (Qt.LeftSection, Qt.TopLeftSection, Qt.BottomLeftSection):
                 max_delta_x = geom.width() - min_w
                 actual_delta_x = min(delta.x(), max_delta_x)
                 left = geom.left() + actual_delta_x
                 width = geom.width() - actual_delta_x
 
-            # Special Case: Top Right Corner (Changes height/top, but anchors 'left' completely)
             if self.resize_direction == Qt.TopRightSection:
                 max_delta_y = geom.height() - min_h
                 actual_delta_y = min(delta.y(), max_delta_y)
                 top = geom.top() + actual_delta_y
                 height = geom.height() - actual_delta_y
 
-            # Don't resize the window directly here — just record the target
-            # geometry. The resize_timer picks this up at a steady ~60fps,
-            # so a burst of mouse events between frames only results in one
-            # resize instead of many.
             target_rect = (left, top, width, height)
             if self.geometry().getRect() != target_rect:
                 self.pending_geometry = target_rect
@@ -400,9 +376,6 @@ class ChatPanel(QWidget):
             event.accept()
 
     def apply_pending_geometry(self):
-        # Called by resize_timer at ~60fps while a resize drag is active.
-        # Only touches the window geometry — the browser stays hidden and
-        # untouched until the drag finishes, so this stays cheap.
         if self.pending_geometry is not None:
             left, top, width, height = self.pending_geometry
             self.setGeometry(left, top, width, height)
@@ -414,14 +387,9 @@ class ChatPanel(QWidget):
         if self.resize_direction:
             self.resize_direction = None
 
-            # Stop throttling and make sure the final geometry is applied
-            # (in case the last move landed between timer ticks).
             self.resize_timer.stop()
             self.apply_pending_geometry()
 
-            # Resume the browser now that resizing is done, so it only
-            # has to re-layout once at the final size instead of on
-            # every frame of the drag.
             self.browser.show()
 
         self.setCursor(QCursor(Qt.ArrowCursor))
