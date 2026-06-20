@@ -167,7 +167,15 @@ class FloatingWidget(QWidget):
             self.width(),
             self.height()
         )
-        self.chat_panel.browser.hide()
+        # Route through ChatPanel's own method instead of touching
+        # chat_panel.browser directly. browser lives inside a
+        # QStackedWidget (content_stack) alongside the settings panel;
+        # calling browser.hide() directly bypasses the stack and leaves it
+        # thinking browser is still "current" while it's actually hidden —
+        # that mismatch is what caused the panel to reopen with a blank
+        # content area until something else (like clicking an LLM button)
+        # forced the stack to run setCurrentWidget() for real.
+        self.chat_panel.reset_to_browser()
         self.chat_panel.hide()
         self.animation_window.shrink_from_to(start_rect, end_rect)
 
