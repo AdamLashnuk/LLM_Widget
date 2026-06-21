@@ -82,9 +82,17 @@ class FloatingWidget(QWidget):
         settings_action.triggered.connect(self.open_settings_directly)
         self.tray_menu.addAction(settings_action)
 
+        # 3. Reset Window Position — safeguard against the bubble/chat
+        # panel getting stranded off-screen (e.g. dragged onto a second
+        # monitor that later gets unplugged). Snaps both back to the
+        # primary screen regardless of where they currently are.
+        reset_position_action = QAction("Reset Window Position", self)
+        reset_position_action.triggered.connect(self.reset_window_position)
+        self.tray_menu.addAction(reset_position_action)
+
         self.tray_menu.addSeparator()
 
-        # 3. Quit Action
+        # 4. Quit Action
         quit_action = QAction("Quit LLM Widget", self)
         quit_action.triggered.connect(self.quit_app)
         self.tray_menu.addAction(quit_action)
@@ -103,6 +111,49 @@ class FloatingWidget(QWidget):
         else:
             # If everything is hidden, bring the bubble back
             self.show()
+            self.raise_()
+
+    def reset_window_position(self):
+        """
+        Safeguard against the bubble/chat panel getting stranded off-screen
+        — e.g. the user drags the bubble onto a second monitor, closes the
+        app, later unplugs that monitor, and reopens the app to find
+        everything spawned somewhere they can no longer click. This forces
+        both windows back onto the primary screen's center, regardless of
+        which one is currently visible, and leaves the app in the same
+        open/closed state it was already in (just relocated) rather than
+        triggering the open/close animation.
+        """
+        screen = QApplication.primaryScreen().availableGeometry()
+
+        # Center the bubble on the primary screen.
+        bubble_x = screen.center().x() - (self.width() // 2)
+        bubble_y = screen.center().y() - (self.height() // 2)
+        self.move(bubble_x, bubble_y)
+
+        # Recompute the chat panel's usual offset-from-bubble position,
+        # now anchored to the bubble's new (on-screen) location, instead
+        # of wherever the panel currently is.
+        panel_x, panel_y = self.calculate_chat_position()
+
+        # calculate_chat_position() clamps against the screen edges, but
+        # on an unusually small primary monitor (narrower/shorter than the
+        # chat panel itself) its sequential left-then-right clamping can
+        # still leave the panel's top-left corner off-screen. Since the
+        # whole point of this feature is guaranteeing the panel ends up
+        # somewhere clickable, clamp once more here directly so the panel
+        # is never positioned with a negative/off-screen origin, even on a
+        # tiny screen.
+        panel_x = max(screen.left(), min(panel_x, screen.right() - self.chat_panel.width()))
+        panel_y = max(screen.top(), min(panel_y, screen.bottom() - self.chat_panel.height()))
+
+        self.chat_panel.move(panel_x, panel_y)
+
+        # Whichever was visible stays visible — this only relocates them,
+        # it doesn't change open/closed state or trigger any animation.
+        if self.chat_panel.isVisible():
+            self.chat_panel.raise_()
+        if self.isVisible():
             self.raise_()
 
     def open_settings_directly(self):

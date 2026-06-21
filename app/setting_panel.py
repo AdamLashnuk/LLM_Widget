@@ -1,20 +1,103 @@
 import os
 import json
 import copy
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QStackedWidget, QButtonGroup, QKeySequenceEdit)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QStackedWidget, QButtonGroup, QKeySequenceEdit, QSlider)
 from PySide6.QtCore import Qt, Signal, QSettings
-from PySide6.QtGui import QPixmap, QColor, QImage, QKeySequence
+from PySide6.QtGui import QPixmap, QColor, QImage, QKeySequence, QPainter, QBrush
 
 DEFAULT_KEYBINDS = {
     "summon": {"label": "Summon Panel", "key": "Ctrl+Space", "is_global": True},
     "hide": {"label": "Hide Panel", "key": "Esc", "is_global": False},
     "next_llm": {"label": "Next LLM", "key": "Ctrl+Tab", "is_global": False},
-    "refresh": {"label": "Refresh Page", "key": "Ctrl+R", "is_global": False},
-    "quick_refresh": {"label": "Quick Refresh", "key": "F5", "is_global": False}
+    "refresh": {"label": "Hard Refresh", "key": "F5", "is_global": False},
+    "quick_refresh": {"label": "Quick Refresh", "key": "Ctrl+R", "is_global": False},
+    "pin_toggle": {"label": "Toggle Pin", "key": "Alt+P", "is_global": True}
 }
+
+class CustomSlider(QWidget):
+    valueChanged = Signal(int)
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumHeight(24)
+        self._value = 0
+        self._min = 0
+        self._max = 100
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover)
+        self._is_hovered = False
+
+    def setMinimum(self, min_val): self._min = min_val
+    def setMaximum(self, max_val): self._max = max_val
+    def value(self): return self._value
+    
+    def setValue(self, val):
+        self._value = max(self._min, min(self._max, val))
+        self.update()
+
+    def enterEvent(self, event):
+        self._is_hovered = True
+        self.update()
+
+    def leaveEvent(self, event):
+        self._is_hovered = False
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w, h = self.width(), self.height()
+        track_h = 6
+        track_y = (h - track_h) / 2
+        handle_r = 8
+
+        if self.isEnabled():
+            track_color = QColor("#151515")
+            fill_color = QColor("#6366f1")
+            handle_color = QColor("#ffffff") if self._is_hovered else QColor("#ececec")
+        else:
+            track_color = QColor("#1f1f1f")
+            fill_color = QColor("#3a3a3a")
+            handle_color = QColor("#555555")
+
+        painter.setPen(Qt.NoPen)
+        
+        # Draw Background Track
+        painter.setBrush(QBrush(track_color))
+        painter.drawRoundedRect(0, track_y, w, track_h, 3, 3)
+
+        # Draw Fill Track
+        ratio = (self._value - self._min) / max(1, (self._max - self._min))
+        fill_w = ratio * w
+        painter.setBrush(QBrush(fill_color))
+        painter.drawRoundedRect(0, track_y, fill_w, track_h, 3, 3)
+
+        # Draw Handle
+        painter.setBrush(QBrush(handle_color))
+        handle_x = max(0, min(w - handle_r * 2, fill_w - handle_r))
+        painter.drawEllipse(handle_x, int(h / 2 - handle_r), handle_r * 2, handle_r * 2)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.isEnabled():
+            self._update_value_from_pos(event.position().x())
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self.isEnabled():
+            self._update_value_from_pos(event.position().x())
+
+    def _update_value_from_pos(self, x):
+        ratio = x / self.width()
+        val = int(self._min + ratio * (self._max - self._min))
+        val = max(self._min, min(self._max, val))
+        if val != self._value:
+            self._value = val
+            self.valueChanged.emit(self._value)
+            self.update()
 
 class SettingPanel(QWidget):
     color_changed = Signal(str)
+    opacity_changed = Signal(int)
     clear_data_requested = Signal()
     keybinds_updated = Signal(dict) # Tells ChatPanel to reload its shortcuts
 
@@ -65,6 +148,7 @@ class SettingPanel(QWidget):
             QPushButton.scopeToggle:hover { background-color: #2a2a2a; color: #ececec; }
             QPushButton.scopeToggle:checked { color: #818cf8; border: 1px solid #6366f1; background-color: rgba(99, 102, 241, 0.1); }
             QFrame.rowDivider { background-color: #333333; }
+
         """)
         self.create_layout()
 
@@ -72,6 +156,60 @@ class SettingPanel(QWidget):
         self.settings.setValue("shortcuts", json.dumps(self.current_keybinds))
         self.settings.sync()
         self.keybinds_updated.emit(self.current_keybinds)
+
+    def _migrate_legacy_color(self, legacy_value):
+        """
+        Pulls a base RGB + opacity percentage out of an old-style saved
+        value, back when each preset baked a fixed alpha directly into its
+        rgba(...) string. Used once, the first time this runs after the
+        opacity slider is added, so existing users land on roughly the
+        same look they had before rather than snapping to a default.
+        """
+        if legacy_value == "transparent":
+            return "transparent", 50
+
+        # legacy_value looks like "rgba(15, 15, 15, 220)"
+        try:
+            inner = legacy_value[legacy_value.index("(") + 1: legacy_value.index(")")]
+            r, g, b, a = [int(p.strip()) for p in inner.split(",")]
+            base_color = f"rgb({r}, {g}, {b})"
+            opacity_percent = round((a / 255) * 100)
+            return base_color, opacity_percent
+        except (ValueError, IndexError):
+            # Anything unexpected falls back to the original default look.
+            return "rgb(15, 15, 15)", 86  # ~220/255
+
+    def _current_rgba_string(self):
+        if self.selected_base_color == "transparent":
+            return "transparent"
+        inner = self.selected_base_color[self.selected_base_color.index("(") + 1: self.selected_base_color.index(")")]
+        alpha = round((self.current_opacity / 100) * 255)
+        return f"rgba({inner}, {alpha})"
+
+    def _on_color_selected(self, button):
+        self.selected_base_color = self.preset_rgb[button]
+        is_transparent = self.selected_base_color == "transparent"
+
+        # Opacity is meaningless for "no color at all" — disable the
+        # slider rather than let it silently do nothing.
+        self.opacity_slider.setEnabled(not is_transparent)
+
+        self._emit_and_save_appearance()
+
+    def _on_opacity_changed(self, value):
+        self.current_opacity = value
+        self.opacity_value_label.setText(f"{value}%")
+        self._emit_and_save_appearance()
+
+    def _emit_and_save_appearance(self):
+        rgba_string = self._current_rgba_string()
+        self.color_changed.emit(rgba_string)
+        self.opacity_changed.emit(self.current_opacity)
+
+        app_settings = QSettings("MyLLMWidget", "ChatPanel")
+        app_settings.setValue("resize_color_base", self.selected_base_color)
+        app_settings.setValue("resize_opacity", self.current_opacity)
+        app_settings.sync()
 
     def update_keybind_seq(self, action_id, seq_str):
         self.current_keybinds[action_id]["key"] = seq_str
@@ -93,6 +231,7 @@ class SettingPanel(QWidget):
                 w["edit"].setKeySequence(QKeySequence(data["key"]))
                 w["toggle"].setChecked(data["is_global"])
                 w["toggle"].setText("Global" if data["is_global"] else "Local")
+                w["label"].setText(data["label"])  # <-- THIS NEW LINE UPDATES THE TEXT
                 
                 w["edit"].blockSignals(False)
                 w["toggle"].blockSignals(False)
@@ -107,7 +246,7 @@ class SettingPanel(QWidget):
         # ---------------- LEFT SIDEBAR ----------------
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(240)
+        self.sidebar.setFixedWidth(180)
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(15, 25, 15, 25)
         sidebar_layout.setSpacing(8)
@@ -174,15 +313,15 @@ class SettingPanel(QWidget):
         app_title.setProperty("class", "pageTitle")
         app_layout.addWidget(app_title)
 
-        card = QFrame()
-        card.setProperty("class", "settingCard")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(20, 20, 20, 20)
-        card_layout.setSpacing(15) 
+        color_card = QFrame()
+        color_card.setProperty("class", "settingCard")
+        color_card_layout = QVBoxLayout(color_card)
+        color_card_layout.setContentsMargins(20, 20, 20, 20)
+        color_card_layout.setSpacing(15) 
         
         resize_title = QLabel("Window Color")
         resize_title.setProperty("class", "cardTitle")
-        card_layout.addWidget(resize_title)
+        color_card_layout.addWidget(resize_title)
 
         color_layout = QHBoxLayout()
         color_layout.setAlignment(Qt.AlignLeft)
@@ -191,6 +330,13 @@ class SettingPanel(QWidget):
         self.color_group = QButtonGroup(self)
         self.color_group.setExclusive(True)
 
+        # Each preset now stores only its base RGB (no alpha baked in) —
+        # opacity is controlled separately by the slider below, so the two
+        # can be mixed independently (e.g. purple at 30% or grey at 90%).
+        # "transparent" has no RGB at all, so it's tracked as a special
+        # case (self.selected_base_color = "transparent") and the slider
+        # is disabled while it's active, since there's no color for an
+        # alpha value to apply to.
         self.btn_transparent = QPushButton("✕")
         self.btn_transparent.setFixedSize(40, 40)
         self.btn_transparent.setCheckable(True) 
@@ -199,17 +345,17 @@ class SettingPanel(QWidget):
         self.btn_grey = QPushButton()
         self.btn_grey.setFixedSize(40, 40)
         self.btn_grey.setCheckable(True)
-        self.btn_grey.setStyleSheet("QPushButton { background-color: rgba(15, 15, 15, 220); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
+        self.btn_grey.setStyleSheet("QPushButton { background-color: rgb(15, 15, 15); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
 
         self.btn_purple = QPushButton()
         self.btn_purple.setFixedSize(40, 40)
         self.btn_purple.setCheckable(True)
-        self.btn_purple.setStyleSheet("QPushButton { background-color: rgba(45, 25, 65, 140); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
+        self.btn_purple.setStyleSheet("QPushButton { background-color: rgb(45, 25, 65); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
 
         self.btn_blue = QPushButton()
         self.btn_blue.setFixedSize(40, 40)
         self.btn_blue.setCheckable(True)
-        self.btn_blue.setStyleSheet("QPushButton { background-color: rgba(15, 30, 50, 160); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
+        self.btn_blue.setStyleSheet("QPushButton { background-color: rgb(15, 30, 50); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
 
         self.color_group.addButton(self.btn_transparent)
         self.color_group.addButton(self.btn_grey)
@@ -221,16 +367,78 @@ class SettingPanel(QWidget):
         color_layout.addWidget(self.btn_purple)
         color_layout.addWidget(self.btn_blue)
 
+        # Base RGB for each preset, keyed by the button that selects it.
+        # "transparent" is the special no-color case.
+        self.preset_rgb = {
+            self.btn_transparent: "transparent",
+            self.btn_grey: "rgb(15, 15, 15)",
+            self.btn_purple: "rgb(45, 25, 65)",
+            self.btn_blue: "rgb(15, 30, 50)",
+        }
+
         app_settings = QSettings("MyLLMWidget", "ChatPanel")
-        saved_color = app_settings.value("resize_color", "rgba(15, 15, 15, 220)")
 
-        if saved_color == "transparent": self.btn_transparent.setChecked(True)
-        elif saved_color == "rgba(45, 25, 65, 140)": self.btn_purple.setChecked(True)
-        elif saved_color == "rgba(15, 30, 50, 160)": self.btn_blue.setChecked(True)
-        else: self.btn_grey.setChecked(True) 
+        # Migrate from the old scheme (a single rgba(...) string with alpha
+        # baked in) if that's all that's saved — pull out the RGB and a
+        # reasonable starting opacity so existing users keep roughly the
+        # look they had, now adjustable via the slider.
+        saved_base_color = app_settings.value("resize_color_base", None)
+        saved_opacity = app_settings.value("resize_opacity", None)
 
-        card_layout.addLayout(color_layout)
-        app_layout.addWidget(card)
+        if saved_base_color is None or saved_opacity is None:
+            legacy_color = app_settings.value("resize_color", "rgba(15, 15, 15, 220)")
+            saved_base_color, saved_opacity = self._migrate_legacy_color(legacy_color)
+
+        self.selected_base_color = saved_base_color
+        self.current_opacity = int(saved_opacity)
+
+        if saved_base_color == "transparent": self.btn_transparent.setChecked(True)
+        elif saved_base_color == "rgb(45, 25, 65)": self.btn_purple.setChecked(True)
+        elif saved_base_color == "rgb(15, 30, 50)": self.btn_blue.setChecked(True)
+        else: self.btn_grey.setChecked(True)
+
+        color_card_layout.addLayout(color_layout)
+        app_layout.addWidget(color_card)
+
+        # --- Opacity card (separate from Window Color) ---
+        opacity_card = QFrame()
+        opacity_card.setProperty("class", "settingCard")
+        opacity_card_layout = QVBoxLayout(opacity_card)
+        opacity_card_layout.setContentsMargins(20, 20, 20, 20)
+        opacity_card_layout.setSpacing(15)
+
+        opacity_caption = QLabel("Background Opacity")
+        opacity_caption.setProperty("class", "cardTitle")
+        opacity_card_layout.addWidget(opacity_caption)
+
+        opacity_row = QHBoxLayout()
+        opacity_row.setSpacing(15)
+
+        # --- THE CUSTOM SLIDER IMPLEMENTATION ---
+        self.opacity_slider = CustomSlider()
+        self.opacity_slider.setMinimum(0)
+        self.opacity_slider.setMaximum(100)
+        self.opacity_slider.setValue(self.current_opacity)
+        self.opacity_slider.setEnabled(saved_base_color != "transparent")
+
+        self.opacity_value_label = QLabel(f"{self.current_opacity}%")
+        self.opacity_value_label.setProperty("class", "cardText")
+        self.opacity_value_label.setFixedWidth(40)
+
+        opacity_row.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_value_label)
+        opacity_card_layout.addLayout(opacity_row)
+
+        app_layout.addWidget(opacity_card)
+
+        # Wire up: clicking a preset updates the base color and re-emits
+        # the combined rgba string at the current opacity. Dragging the
+        # slider updates opacity and re-emits at the current color.
+        self.btn_transparent.clicked.connect(lambda: self._on_color_selected(self.btn_transparent))
+        self.btn_grey.clicked.connect(lambda: self._on_color_selected(self.btn_grey))
+        self.btn_purple.clicked.connect(lambda: self._on_color_selected(self.btn_purple))
+        self.btn_blue.clicked.connect(lambda: self._on_color_selected(self.btn_blue))
+        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
 
         # === PAGE 1: PRIVACY ===
         self.privacy_page = QWidget()
@@ -328,7 +536,7 @@ class SettingPanel(QWidget):
             kb_card_layout.addWidget(row_widget)
             
             # Store references so the Reset button can edit them later
-            self.keybind_widgets[action_id] = {"edit": key_edit, "toggle": toggle}
+            self.keybind_widgets[action_id] = {"edit": key_edit, "toggle": toggle, "label": lbl}
             
             if not is_last:
                 divider = QFrame()
@@ -350,10 +558,6 @@ class SettingPanel(QWidget):
 
         # Connections
         self.nav_group.idClicked.connect(self.content_stack.setCurrentIndex)
-        self.btn_transparent.clicked.connect(lambda: self.color_changed.emit("transparent"))
-        self.btn_purple.clicked.connect(lambda: self.color_changed.emit("rgba(45, 25, 65, 140)"))
-        self.btn_blue.clicked.connect(lambda: self.color_changed.emit("rgba(15, 30, 50, 160)"))
-        self.btn_grey.clicked.connect(lambda: self.color_changed.emit("rgba(15, 15, 15, 220)"))
 
         main_layout.addWidget(self.sidebar)
         main_layout.addWidget(self.content_stack)

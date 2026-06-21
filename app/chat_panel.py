@@ -136,6 +136,24 @@ class ChatPanel(QWidget):
             QSizePolicy.Expanding
         )
 
+        # The 400x400 minimum set in setup_window() was sized for the
+        # browser page, but the Settings page (fixed 240px sidebar + cards
+        # that need real room to render) has a much larger genuine minimum.
+        # Below that minimum, SettingPanel was being squeezed smaller than
+        # its own minimumSizeHint, which left part of it unpainted (the
+        # "bottom half just shows transparent background" bug). Raising
+        # the whole panel's minimum to whatever Settings actually needs
+        # (plus title bar height + container margins) means the window
+        # simply can't be resized into that broken state, the same way
+        # most apps won't let you shrink below what their settings UI
+        # needs.
+        settings_min = self.setting_panel.minimumSizeHint()
+        browser_min = QSize(400, 400)
+        title_bar_and_margins_height = 45 + 24  # title bar + top/bottom container margins
+        min_width = max(browser_min.width(), settings_min.width() + 24)
+        min_height = max(browser_min.height(), settings_min.height() + title_bar_and_margins_height)
+        self.setMinimumSize(min_width, min_height)
+
         self.setting_panel.color_changed.connect(self.update_content_area_color)
         self.setting_panel.clear_data_requested.connect(self.clear_browsing_data)
         
@@ -176,15 +194,13 @@ class ChatPanel(QWidget):
             if self.isVisible():
                 self.close_panel()
             else:
-                if self.bubble:
-                    # This triggers your exact animation from widget.py!
+                if self.bubble: 
                     self.bubble.open_chat()
-                else:
-                    # Fallback just in case the bubble doesn't exist
+                else: 
                     self.show()
                     self.raise_()
                     self.activateWindow()
-                
+                    
         elif action_id == "hide":
             self.close_panel()
             
@@ -192,11 +208,40 @@ class ChatPanel(QWidget):
             self.cycle_next_llm()
             
         elif action_id == "quick_refresh":
+            # Standard fast reload (F5)
             self.browser.reload()
             
         elif action_id == "refresh":
+            # HARD reload: ignores cache to fix broken pages (Ctrl+R)
             from PySide6.QtWebEngineCore import QWebEnginePage
             self.browser.page().action(QWebEnginePage.ReloadAndBypassCache).trigger()
+        
+        elif action_id == "pin_toggle":
+            # 1. Check the current pin status of the chat panel
+            is_pinned = bool(self.windowFlags() & Qt.WindowStaysOnTopHint)
+            
+            # 2. Apply to Chat Panel
+            panel_was_visible = self.isVisible()
+            if is_pinned:
+                self.setWindowFlags(self.windowFlags() & ~Qt.WindowStaysOnTopHint)
+            else:
+                self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+            
+            # ONLY redraw the panel if it was already open
+            if panel_was_visible:
+                self.show()
+
+            # 3. Apply the exact same state to the Bubble so they stay synced
+            if self.bubble:
+                bubble_was_visible = self.bubble.isVisible()
+                if is_pinned:
+                    self.bubble.setWindowFlags(self.bubble.windowFlags() & ~Qt.WindowStaysOnTopHint)
+                else:
+                    self.bubble.setWindowFlags(self.bubble.windowFlags() | Qt.WindowStaysOnTopHint)
+                
+                # ONLY redraw the bubble if it was currently on screen
+                if bubble_was_visible:
+                    self.bubble.show()
 
     def cycle_next_llm(self):
         if not self.active_llms: return
@@ -222,7 +267,9 @@ class ChatPanel(QWidget):
         self.settings.sync()
 
     def setup_window(self):
-        self.setMinimumSize(400, 400)
+        # Minimum size is set in __init__, right after SettingPanel is
+        # constructed, since it needs to account for SettingPanel's actual
+        # minimum size requirements (see the comment there for why).
 
         self.settings = QSettings("MyLLMWidget", "ChatPanel")
         self.current_provider = self.settings.value("current_provider", "ChatGPT")
@@ -948,14 +995,44 @@ class ChatPanel(QWidget):
         container_layout.addWidget(self.content_stack, 1)
         self.container.setLayout(container_layout)
 
-        saved_color = self.settings.value("resize_color", "transparent")
+        # Compose the initial background from the new base-color +
+        # opacity keys, falling back to migrating the old single-string
+        # "resize_color" (which had a fixed alpha baked in) if this is the
+        # first launch since the opacity slider was added.
+        saved_base = self.settings.value("resize_color_base", None)
+        saved_opacity = self.settings.value("resize_opacity", None)
+        if saved_base is None or saved_opacity is None:
+            legacy = self.settings.value("resize_color", "transparent")
+            saved_base, saved_opacity = self._migrate_legacy_color(legacy)
+        initial_color = self._compose_rgba(saved_base, int(saved_opacity))
+
         self.container.setStyleSheet(
-            f"QFrame#mainContainer {{ background-color: {saved_color}; border: 1px solid rgba(255, 255, 255, 20); border-radius: 24px; }}")
+            f"QFrame#mainContainer {{ background-color: {initial_color}; border: 1px solid rgba(255, 255, 255, 20); border-radius: 24px; }}")
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(self.container)
         self.setLayout(main_layout)
+
+    def _migrate_legacy_color(self, legacy_value):
+        # Mirrors SettingPanel._migrate_legacy_color — kept independent
+        # rather than imported since ChatPanel needs this once at startup,
+        # before SettingPanel necessarily has a chance to run its own copy.
+        if legacy_value == "transparent":
+            return "transparent", 50
+        try:
+            inner = legacy_value[legacy_value.index("(") + 1: legacy_value.index(")")]
+            r, g, b, a = [int(p.strip()) for p in inner.split(",")]
+            return f"rgb({r}, {g}, {b})", round((a / 255) * 100)
+        except (ValueError, IndexError):
+            return "rgb(15, 15, 15)", 86
+
+    def _compose_rgba(self, base_color, opacity_percent):
+        if base_color == "transparent":
+            return "transparent"
+        inner = base_color[base_color.index("(") + 1: base_color.index(")")]
+        alpha = round((opacity_percent / 100) * 255)
+        return f"rgba({inner}, {alpha})"
 
     def show_browser(self):
         self.content_stack.setCurrentWidget(self.browser)
@@ -972,9 +1049,12 @@ class ChatPanel(QWidget):
             self.hide()
 
     def update_content_area_color(self, new_color):
+        # new_color arrives already fully composed (base RGB + current
+        # opacity baked in as alpha) from SettingPanel's color_changed
+        # signal — nothing left to do here but apply and persist it.
         self.container.setStyleSheet(
             f"QFrame#mainContainer {{ background-color: {new_color}; border: 1px solid rgba(255, 255, 255, 20); border-radius: 24px; }}")
-        self.save_setting("resize_color", new_color)
+        self.save_setting("resize_color", new_color)  # kept for any other code still reading this key
 
     def clear_browsing_data(self):
         self.profile.cookieStore().deleteAllCookies()
