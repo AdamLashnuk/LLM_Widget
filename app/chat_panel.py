@@ -1,39 +1,29 @@
 import os
 import json
 import uuid
+import keyboard
 from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel,
                                QFrame, QRubberBand, QGraphicsOpacityEffect, QSizePolicy,
                                QScrollArea, QDialog, QLineEdit, QListWidget, QListWidgetItem,
                                QStackedWidget, QMenu, QInputDialog)
 from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings, QPropertyAnimation, QEasingCurve, Signal, QPoint, QRect, \
-    QParallelAnimationGroup, QSequentialAnimationGroup
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QCursor
+    QParallelAnimationGroup, QSequentialAnimationGroup, QObject
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QCursor, QShortcut, QKeySequence
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 
 from app.setting_panel import SettingPanel
 
-
-# Animated plus/delete version: clean-pop v3
-
+# --- Safe thread bridge for global shortcuts ---
+class GlobalHotkeyBridge(QObject):
+    trigger = Signal(str)
 
 class HorizontalWheelScrollArea(QScrollArea):
-    """
-    A QScrollArea that scrolls horizontally in response to the mouse wheel.
-
-    QScrollArea normally only scrolls vertically on wheel events — it has no
-    built-in way to redirect that motion to a horizontal scrollbar. Since
-    this bar only ever has horizontal content (the LLM buttons), we just
-    take whatever wheel delta arrives and apply it to the horizontal
-    scrollbar instead of the vertical one.
-    """
-
     def wheelEvent(self, event):
         delta = event.angleDelta().y() or event.angleDelta().x()
         bar = self.horizontalScrollBar()
         bar.setValue(bar.value() - delta)
         event.accept()
-
 
 class AddLLMDialog(QDialog):
     llm_selected = Signal(str, str)
@@ -124,18 +114,20 @@ class ChatPanel(QWidget):
         self.drag_position = None
         self.tab_animations = []
 
-        self.resize_margin = 8  # Detects mouse when it is within 8 pixels of an edge
-        self.resize_direction = None  # Tracks which edge or corner is being pulled
+        self.resize_margin = 8  
+        self.resize_direction = None  
 
-        # --- Resize throttling ---
         self.pending_geometry = None
         self.resize_timer = QTimer(self)
-        self.resize_timer.setInterval(5)  # ~200 fps
+        self.resize_timer.setInterval(5)  
         self.resize_timer.timeout.connect(self.apply_pending_geometry)
+        
+        # --- Keybind Setup ---
+        self.local_shortcuts = []
+        self.hotkey_bridge = GlobalHotkeyBridge()
+        self.hotkey_bridge.trigger.connect(self.execute_hotkey_action)
 
         self.setup_window()
-
-        # 1. THIS MUST COME FIRST: It creates self.chatgpt_button, etc.
         self.create_widgets()
 
         self.setting_panel = SettingPanel()
@@ -144,14 +136,86 @@ class ChatPanel(QWidget):
             QSizePolicy.Expanding
         )
 
-        # Listen for the signal from the settings panel
         self.setting_panel.color_changed.connect(self.update_content_area_color)
-
-        # --- NEW: Listen for the privacy clear data signal ---
         self.setting_panel.clear_data_requested.connect(self.clear_browsing_data)
+        
+        # --- Listen for keybind changes ---
+        self.setting_panel.keybinds_updated.connect(self.apply_keybinds)
+        self.apply_keybinds(self.setting_panel.current_keybinds)
 
-        # 2. THIS MUST COME LAST: It puts the widgets into the layout
         self.create_layout()
+
+    def apply_keybinds(self, keybinds_dict):
+        try: keyboard.unhook_all()
+        except: pass
+
+        for sc in self.local_shortcuts:
+            sc.setParent(None)
+            sc.deleteLater()
+        self.local_shortcuts.clear()
+
+        for action_id, data in keybinds_dict.items():
+            key_str = data["key"]
+            is_global = data["is_global"]
+            
+            if not key_str: continue
+
+            if is_global:
+                kb_str = key_str.lower().replace("meta", "windows").replace("return", "enter").replace("del", "delete").replace("ins", "insert")
+                try:
+                    keyboard.add_hotkey(kb_str, lambda a=action_id: self.hotkey_bridge.trigger.emit(a))
+                except Exception as e:
+                    print(f"Failed to bind global hotkey {kb_str}: {e}")
+            else:
+                sc = QShortcut(QKeySequence(key_str), self)
+                sc.activated.connect(lambda a=action_id: self.execute_hotkey_action(a))
+                self.local_shortcuts.append(sc)
+
+    def execute_hotkey_action(self, action_id):
+        if action_id == "summon":
+            if self.isVisible():
+                self.close_panel()
+            else:
+                if self.bubble:
+                    # This triggers your exact animation from widget.py!
+                    self.bubble.open_chat()
+                else:
+                    # Fallback just in case the bubble doesn't exist
+                    self.show()
+                    self.raise_()
+                    self.activateWindow()
+                
+        elif action_id == "hide":
+            self.close_panel()
+            
+        elif action_id == "next_llm":
+            self.cycle_next_llm()
+            
+        elif action_id == "quick_refresh":
+            self.browser.reload()
+            
+        elif action_id == "refresh":
+            from PySide6.QtWebEngineCore import QWebEnginePage
+            self.browser.page().action(QWebEnginePage.ReloadAndBypassCache).trigger()
+
+    def cycle_next_llm(self):
+        if not self.active_llms: return
+        current_idx = -1
+        for i, llm in enumerate(self.active_llms):
+            if llm["id"] == self.current_provider_id:
+                current_idx = i
+                break
+        if current_idx == -1 and self.active_llms: current_idx = 0
+        
+        next_idx = (current_idx + 1) % len(self.active_llms)
+        next_llm = self.active_llms[next_idx]
+        
+        self.current_provider = next_llm["name"]
+        self.current_provider_id = next_llm["id"]
+        self.save_setting("current_provider", self.current_provider)
+        self.save_setting("current_provider_id", self.current_provider_id)
+        
+        self.open_llm_url(next_llm["name"], next_llm["url"], next_llm["id"])
 
     def save_setting(self, key, value):
         self.settings.setValue(key, value)
@@ -160,7 +224,6 @@ class ChatPanel(QWidget):
     def setup_window(self):
         self.setMinimumSize(400, 400)
 
-        # Initialize QSettings and load the saved size
         self.settings = QSettings("MyLLMWidget", "ChatPanel")
         self.current_provider = self.settings.value("current_provider", "ChatGPT")
         self.current_provider_id = self.settings.value("current_provider_id", None)
@@ -195,7 +258,6 @@ class ChatPanel(QWidget):
         )
 
         self.setAttribute(Qt.WA_TranslucentBackground)
-
         self.setMouseTracking(True)
 
         self.setStyleSheet("""
@@ -456,7 +518,6 @@ class ChatPanel(QWidget):
         index = self._find_llm_index(llm_id)
         if index == -1:
             return
-
         self.play_delete_pop_animation(llm_id)
 
     def finish_delete_llm_entry(self, llm_id):
@@ -484,13 +545,6 @@ class ChatPanel(QWidget):
         self.render_active_llms()
 
     def play_delete_pop_animation(self, llm_id):
-        """
-        Delete animation with delayed layout movement:
-        - the real button stays in the layout as an invisible spacer
-        - a ghost tab does the pop/shrink/fade animation on top
-        - after the ghost fully disappears, waits briefly
-        - then the real button width collapses, making the right tab slide over
-        """
         button = self.llm_buttons.get(llm_id)
 
         if not button:
@@ -502,7 +556,6 @@ class ChatPanel(QWidget):
         start_width = button.width()
         start_height = button.height()
 
-        # Keep the real button in the layout so nothing moves yet.
         button.setEnabled(False)
         button.setMinimumWidth(start_width)
         button.setMaximumWidth(start_width)
@@ -513,7 +566,6 @@ class ChatPanel(QWidget):
         button.setGraphicsEffect(button_opacity)
         button_opacity.setOpacity(0.0)
 
-        # Ghost is what visually pops/disappears.
         ghost = QPushButton(button.text(), self)
         ghost.setGeometry(button_rect)
         ghost.setStyleSheet("""
@@ -571,7 +623,6 @@ class ChatPanel(QWidget):
         shrink_group.addAnimation(shrink_anim)
         shrink_group.addAnimation(fade_anim)
 
-        # Small water-like particle pop.
         particle_group = QParallelAnimationGroup(self)
         pop_offsets = [
             QPoint(-18, -8), QPoint(-12, 12), QPoint(15, -11),
@@ -605,8 +656,6 @@ class ChatPanel(QWidget):
             particle_group.addAnimation(dot_move)
             particle_group.addAnimation(dot_fade)
 
-        # This is the actual slide-over part.
-        # It only starts after the tab has fully disappeared, plus a tiny pause.
         collapse_min = QPropertyAnimation(button, b"minimumWidth")
         collapse_min.setDuration(320)
         collapse_min.setStartValue(start_width)
@@ -622,7 +671,7 @@ class ChatPanel(QWidget):
         collapse_group = QParallelAnimationGroup(self)
         collapse_group.addAnimation(collapse_min)
         collapse_group.addAnimation(collapse_max)
-#
+
         def finish_pop():
             shrink_group.start()
             particle_group.start()
@@ -672,12 +721,6 @@ class ChatPanel(QWidget):
         return QRect(top_left, widget.size())
 
     def play_add_llm_animation(self, new_llm):
-        """
-        Drop/add animation from the other version:
-        - a small droplet falls into the plus button
-        - the new tab materializes from the plus position
-        - the plus button slides to the right with a soft OutBack bounce
-        """
         old_plus_rect = self.widget_rect_in_panel(self.add_button)
         plus_center = old_plus_rect.center()
 
@@ -748,7 +791,6 @@ class ChatPanel(QWidget):
         return dot, opacity
 
     def play_water_splash(self, old_plus_rect, plus_center, new_llm):
-        # Ripple ring + small droplets shooting out = the "plash" feeling.
         ripple = QLabel(self)
         ripple.setStyleSheet("""
             QLabel {
@@ -814,7 +856,6 @@ class ChatPanel(QWidget):
             splash_group.addAnimation(dot_move)
             splash_group.addAnimation(dot_fade)
 
-        # Start materializing the tab while the splash is still fading.
         def start_tab_materialize():
             self.active_llms.append(new_llm)
             self.save_setting("active_llms", json.dumps(self.active_llms))
@@ -843,13 +884,11 @@ class ChatPanel(QWidget):
         new_tab.hide()
         self.add_button.hide()
 
-        # Temporary tab clone: makes it look like the plus becomes the new LLM tab.
         tab_clone = QPushButton(new_tab.text(), self)
         tab_clone.setGeometry(old_plus_rect)
         tab_clone.show()
         tab_clone.raise_()
 
-        # Temporary plus clone: makes it look like the plus button ploops to the right.
         plus_clone = QPushButton("+", self)
         plus_clone.setObjectName("addButton")
         plus_clone.setFixedSize(self.add_button.size())
@@ -937,18 +976,12 @@ class ChatPanel(QWidget):
             f"QFrame#mainContainer {{ background-color: {new_color}; border: 1px solid rgba(255, 255, 255, 20); border-radius: 24px; }}")
         self.save_setting("resize_color", new_color)
 
-    # --- NEW: Function to execute Chromium cache clear ---
     def clear_browsing_data(self):
-        # Clears all persistent cookies from the session_data folder
         self.profile.cookieStore().deleteAllCookies()
-        # Wipes all cached website files/images
         self.profile.clearHttpCache()
-        # Instantly reloads the browser view so the user can verify they are logged out
         self.browser.reload()
 
-        # After wiping data, snap back to the browser so the user can see the login screen again
         self.show_browser()
-        # Reset the sidebar toggle back to Appearance for the next time settings is opened
         self.setting_panel.appearance_btn.setChecked(True)
         self.setting_panel.content_stack.setCurrentIndex(0)
 

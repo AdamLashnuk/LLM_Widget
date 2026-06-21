@@ -1,136 +1,124 @@
 import os
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QStackedWidget, QButtonGroup)
+import json
+import copy
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QStackedWidget, QButtonGroup, QKeySequenceEdit)
 from PySide6.QtCore import Qt, Signal, QSettings
-from PySide6.QtGui import QPixmap, QColor, QImage
+from PySide6.QtGui import QPixmap, QColor, QImage, QKeySequence
+
+DEFAULT_KEYBINDS = {
+    "summon": {"label": "Summon Panel", "key": "Ctrl+Space", "is_global": True},
+    "hide": {"label": "Hide Panel", "key": "Esc", "is_global": False},
+    "next_llm": {"label": "Next LLM", "key": "Ctrl+Tab", "is_global": False},
+    "refresh": {"label": "Refresh Page", "key": "Ctrl+R", "is_global": False},
+    "quick_refresh": {"label": "Quick Refresh", "key": "F5", "is_global": False}
+}
 
 class SettingPanel(QWidget):
     color_changed = Signal(str)
     clear_data_requested = Signal()
+    keybinds_updated = Signal(dict) # Tells ChatPanel to reload its shortcuts
 
     def __init__(self):
         super().__init__()
+        
+        # Load saved keybinds from disk, or use defaults
+        self.settings = QSettings("MyLLMWidget", "Keybinds")
+        saved_binds = self.settings.value("shortcuts")
+        if saved_binds:
+            self.current_keybinds = json.loads(saved_binds)
+            # Ensure all default keys exist in case we add new ones in future updates
+            for k, v in DEFAULT_KEYBINDS.items():
+                if k not in self.current_keybinds:
+                    self.current_keybinds[k] = v
+        else:
+            self.current_keybinds = copy.deepcopy(DEFAULT_KEYBINDS)
+            
+        self.keybind_widgets = {} # Stores references to the UI inputs
 
         self.setStyleSheet("""
             /* Global widget rules */
-            QWidget {
-                background-color: #1a1a1a;
-                color: #ececec;
-                font-family: "Segoe UI";
-            }
-
-            QWidget#settingPanelMain {
-                border-radius: 12px; 
-            }
-
-            QLabel {
-                background-color: transparent;
-            }
+            QWidget { background-color: #1a1a1a; color: #ececec; font-family: "Segoe UI"; }
+            QWidget#settingPanelMain { border-radius: 12px; }
+            QWidget#transparentWidget { background-color: transparent; }
+            QLabel { background-color: transparent; }
 
             /* --- Sidebar Styling --- */
-            QFrame#sidebar {
-                background-color: #1f1f1f;
-                border-right: 1px solid #333333;
-            }
-
-            QLabel#sidebarTitle {
-                font-size: 18px;
-                font-weight: bold;
-                color: #ffffff;
-            }
-
-            QPushButton.sidebarButton {
-                background-color: transparent;
-                border: none;
-                border-radius: 6px;
-                color: #b4b4b4;
-                font-size: 14px;
-                font-weight: 500;
-                text-align: left;
-                padding: 10px 15px;
-            }
-
-            QPushButton.sidebarButton:hover {
-                background-color: #2a2a2a;
-                color: #ececec;
-            }
-
-            QPushButton.sidebarButton:checked {
-                background-color: #333333;
-                color: #ffffff;
-            }
+            QFrame#sidebar { background-color: #1f1f1f; border-right: 1px solid #333333; }
+            QLabel#sidebarTitle { font-size: 18px; font-weight: bold; color: #ffffff; }
+            QPushButton.sidebarButton { background-color: transparent; border: none; border-radius: 6px; color: #b4b4b4; font-size: 14px; font-weight: 500; text-align: left; padding: 10px 15px; }
+            QPushButton.sidebarButton:hover { background-color: #2a2a2a; color: #ececec; }
+            QPushButton.sidebarButton:checked { background-color: #333333; color: #ffffff; }
 
             /* --- Content Area Styling --- */
-            QLabel.pageTitle {
-                background-color: transparent;
-                font-size: 24px;
-                font-weight: 600;
-                color: #ffffff;
-                margin-bottom: 10px;
-            }
-
-            QFrame.settingCard {
-                background-color: #242424;
-                border: 1px solid #333333;
-                border-radius: 10px;
-            }
-            
-            QLabel.cardTitle {
-                background-color: transparent;
-                font-size: 16px;
-                font-weight: 500;
-                color: #ffffff;
-            }
-            
-            QLabel.cardText {
-                background-color: transparent;
-                font-size: 14px;
-                color: #b4b4b4;
-            }
+            QLabel.pageTitle { font-size: 24px; font-weight: 600; color: #ffffff; margin-bottom: 10px; }
+            QFrame.settingCard { background-color: #242424; border: 1px solid #333333; border-radius: 10px; }
+            QLabel.cardTitle { font-size: 16px; font-weight: 500; color: #ffffff; }
+            QLabel.cardText { font-size: 14px; color: #b4b4b4; }
             
             /* --- Danger Button Styling --- */
-            QPushButton.dangerButton {
-                background-color: rgba(220, 38, 38, 0.15);
-                border: 1px solid rgba(220, 38, 38, 0.5);
-                color: #f87171;
-                border-radius: 8px;
-                padding: 10px 20px;
-                font-weight: 600;
-                font-size: 14px;
-            }
-            QPushButton.dangerButton:hover {
-                background-color: rgba(220, 38, 38, 0.25);
-                color: #fca5a5;
-            }
+            QPushButton.dangerButton { background-color: rgba(220, 38, 38, 0.15); border: 1px solid rgba(220, 38, 38, 0.5); color: #f87171; border-radius: 8px; padding: 10px 20px; font-weight: 600; font-size: 14px; }
+            QPushButton.dangerButton:hover { background-color: rgba(220, 38, 38, 0.25); color: #fca5a5; }
+            
+            /* --- Keybinds UI Styling --- */
+            QKeySequenceEdit { background-color: #151515; border: 1px solid #333333; border-radius: 6px; color: #ffffff; padding: 6px 10px; }
+            QPushButton.scopeToggle { background-color: #242424; color: #b4b4b4; border: 1px solid #333333; border-radius: 6px; padding: 6px 0px; font-size: 13px; }
+            QPushButton.scopeToggle:hover { background-color: #2a2a2a; color: #ececec; }
+            QPushButton.scopeToggle:checked { color: #818cf8; border: 1px solid #6366f1; background-color: rgba(99, 102, 241, 0.1); }
+            QFrame.rowDivider { background-color: #333333; }
         """)
-
         self.create_layout()
 
+    def save_all_keybinds(self):
+        self.settings.setValue("shortcuts", json.dumps(self.current_keybinds))
+        self.settings.sync()
+        self.keybinds_updated.emit(self.current_keybinds)
+
+    def update_keybind_seq(self, action_id, seq_str):
+        self.current_keybinds[action_id]["key"] = seq_str
+        self.save_all_keybinds()
+
+    def update_keybind_scope(self, action_id, is_global):
+        self.current_keybinds[action_id]["is_global"] = is_global
+        self.save_all_keybinds()
+
+    def reset_keybinds(self):
+        self.current_keybinds = copy.deepcopy(DEFAULT_KEYBINDS)
+        # Update the UI inputs to match the defaults
+        for action_id, data in self.current_keybinds.items():
+            if action_id in self.keybind_widgets:
+                w = self.keybind_widgets[action_id]
+                w["edit"].blockSignals(True)
+                w["toggle"].blockSignals(True)
+                
+                w["edit"].setKeySequence(QKeySequence(data["key"]))
+                w["toggle"].setChecked(data["is_global"])
+                w["toggle"].setText("Global" if data["is_global"] else "Local")
+                
+                w["edit"].blockSignals(False)
+                w["toggle"].blockSignals(False)
+        self.save_all_keybinds()
+
     def create_layout(self):
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # -----------------------------------------
-        # LEFT SIDEBAR
-        # -----------------------------------------
+        # ---------------- LEFT SIDEBAR ----------------
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setFixedWidth(240)
-
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(15, 25, 15, 25)
         sidebar_layout.setSpacing(8)
 
-        # --- Settings Header (Icon + Title) ---
         header_layout = QHBoxLayout()
         header_layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         header_layout.setSpacing(10)
         header_layout.setContentsMargins(10, 0, 0, 0)
 
         icon_label = QLabel()
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         icon_path = os.path.join(project_root, "assets", "portalbig.png")
-        
         image = QImage(icon_path)
         if not image.isNull():
             image = image.convertToFormat(QImage.Format_ARGB32)
@@ -140,21 +128,16 @@ class SettingPanel(QWidget):
                     if color.red() > 240 and color.green() > 240 and color.blue() > 240:
                         color.setAlpha(0)
                         image.setPixelColor(x, y, color)
-
             pixmap = QPixmap.fromImage(image)
-            scaled_pixmap = pixmap.scaled(32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            icon_label.setPixmap(scaled_pixmap)
+            icon_label.setPixmap(pixmap.scaled(32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
         title = QLabel("Settings")
         title.setObjectName("sidebarTitle")
-        
         header_layout.addWidget(icon_label)
         header_layout.addWidget(title)
-        
         sidebar_layout.addLayout(header_layout)
         sidebar_layout.addSpacing(15)
 
-        # --- Sidebar Navigation Group ---
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
 
@@ -165,18 +148,20 @@ class SettingPanel(QWidget):
         self.nav_group.addButton(self.appearance_btn, 0)
         sidebar_layout.addWidget(self.appearance_btn)
 
-        # --- CHANGED: Used && to render a single & symbol ---
         self.privacy_btn = QPushButton("Privacy && Data")
         self.privacy_btn.setProperty("class", "sidebarButton")
         self.privacy_btn.setCheckable(True)
         self.nav_group.addButton(self.privacy_btn, 1)
         sidebar_layout.addWidget(self.privacy_btn)
 
+        self.keybinds_btn = QPushButton("Keybinds")
+        self.keybinds_btn.setProperty("class", "sidebarButton")
+        self.keybinds_btn.setCheckable(True)
+        self.nav_group.addButton(self.keybinds_btn, 2)
+        sidebar_layout.addWidget(self.keybinds_btn)
         sidebar_layout.addStretch()
 
-        # -----------------------------------------
-        # RIGHT CONTENT AREA
-        # -----------------------------------------
+        # ---------------- RIGHT CONTENT AREA ----------------
         self.content_stack = QStackedWidget()
         
         # === PAGE 0: APPEARANCE ===
@@ -184,7 +169,7 @@ class SettingPanel(QWidget):
         app_layout = QVBoxLayout(self.appearance_page)
         app_layout.setContentsMargins(40, 40, 40, 40)
         app_layout.setAlignment(Qt.AlignTop)
-
+        
         app_title = QLabel("Appearance")
         app_title.setProperty("class", "pageTitle")
         app_layout.addWidget(app_title)
@@ -209,38 +194,22 @@ class SettingPanel(QWidget):
         self.btn_transparent = QPushButton("✕")
         self.btn_transparent.setFixedSize(40, 40)
         self.btn_transparent.setCheckable(True) 
-        self.btn_transparent.setStyleSheet("""
-            QPushButton { background-color: transparent; border: 2px dashed #444444; border-radius: 8px; color: #555555; font-weight: bold; }
-            QPushButton:hover { border: 2px dashed #b4b4b4; color: #b4b4b4; }
-            QPushButton:checked { border: 2px solid #6366f1; color: #6366f1; } 
-        """)
+        self.btn_transparent.setStyleSheet("QPushButton { background-color: transparent; border: 2px dashed #444444; border-radius: 8px; color: #555555; font-weight: bold; } QPushButton:hover { border: 2px dashed #b4b4b4; color: #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; color: #6366f1; } ")
 
         self.btn_grey = QPushButton()
         self.btn_grey.setFixedSize(40, 40)
         self.btn_grey.setCheckable(True)
-        self.btn_grey.setStyleSheet("""
-            QPushButton { background-color: rgba(15, 15, 15, 220); border: 2px solid #333333; border-radius: 8px; }
-            QPushButton:hover { border: 2px solid #b4b4b4; }
-            QPushButton:checked { border: 2px solid #6366f1; }
-        """)
+        self.btn_grey.setStyleSheet("QPushButton { background-color: rgba(15, 15, 15, 220); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
 
         self.btn_purple = QPushButton()
         self.btn_purple.setFixedSize(40, 40)
         self.btn_purple.setCheckable(True)
-        self.btn_purple.setStyleSheet("""
-            QPushButton { background-color: rgba(45, 25, 65, 140); border: 2px solid #333333; border-radius: 8px; }
-            QPushButton:hover { border: 2px solid #b4b4b4; }
-            QPushButton:checked { border: 2px solid #6366f1; }
-        """)
+        self.btn_purple.setStyleSheet("QPushButton { background-color: rgba(45, 25, 65, 140); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
 
         self.btn_blue = QPushButton()
         self.btn_blue.setFixedSize(40, 40)
         self.btn_blue.setCheckable(True)
-        self.btn_blue.setStyleSheet("""
-            QPushButton { background-color: rgba(15, 30, 50, 160); border: 2px solid #333333; border-radius: 8px; }
-            QPushButton:hover { border: 2px solid #b4b4b4; }
-            QPushButton:checked { border: 2px solid #6366f1; }
-        """)
+        self.btn_blue.setStyleSheet("QPushButton { background-color: rgba(15, 30, 50, 160); border: 2px solid #333333; border-radius: 8px; } QPushButton:hover { border: 2px solid #b4b4b4; } QPushButton:checked { border: 2px solid #6366f1; }")
 
         self.color_group.addButton(self.btn_transparent)
         self.color_group.addButton(self.btn_grey)
@@ -252,8 +221,8 @@ class SettingPanel(QWidget):
         color_layout.addWidget(self.btn_purple)
         color_layout.addWidget(self.btn_blue)
 
-        settings = QSettings("MyLLMWidget", "ChatPanel")
-        saved_color = settings.value("resize_color", "rgba(15, 15, 15, 220)")
+        app_settings = QSettings("MyLLMWidget", "ChatPanel")
+        saved_color = app_settings.value("resize_color", "rgba(15, 15, 15, 220)")
 
         if saved_color == "transparent": self.btn_transparent.setChecked(True)
         elif saved_color == "rgba(45, 25, 65, 140)": self.btn_purple.setChecked(True)
@@ -288,7 +257,6 @@ class SettingPanel(QWidget):
         danger_desc.setWordWrap(True)
         priv_card_layout.addWidget(danger_desc)
 
-        # The Red Button
         self.btn_clear_data = QPushButton("Clear All Data && Cookies")
         self.btn_clear_data.setProperty("class", "dangerButton")
         self.btn_clear_data.setCursor(Qt.PointingHandCursor)
@@ -298,17 +266,90 @@ class SettingPanel(QWidget):
         btn_layout.addWidget(self.btn_clear_data)
         btn_layout.addStretch()
         priv_card_layout.addLayout(btn_layout)
-
         priv_layout.addWidget(priv_card)
+
+        # === PAGE 2: KEYBINDS ===
+        self.keybinds_page = QWidget()
+        kb_layout = QVBoxLayout(self.keybinds_page)
+        kb_layout.setContentsMargins(40, 40, 40, 40)
+        kb_layout.setAlignment(Qt.AlignTop)
+
+        kb_header_layout = QHBoxLayout()
+        kb_title = QLabel("Keybinds")
+        kb_title.setProperty("class", "pageTitle")
+        kb_header_layout.addWidget(kb_title)
+        kb_header_layout.addStretch()
+
+        self.btn_reset_keybinds = QPushButton("Reset Keybinds")
+        self.btn_reset_keybinds.setCursor(Qt.PointingHandCursor)
+        self.btn_reset_keybinds.setStyleSheet("""
+            QPushButton { background-color: transparent; color: #b4b4b4; font-size: 13px; font-weight: 500; text-decoration: underline; border: none; margin-bottom: 10px; }
+            QPushButton:hover { color: #ececec; }
+        """)
+        self.btn_reset_keybinds.clicked.connect(self.reset_keybinds)
+        kb_header_layout.addWidget(self.btn_reset_keybinds)
+        kb_layout.addLayout(kb_header_layout)
+
+        kb_card = QFrame()
+        kb_card.setProperty("class", "settingCard")
+        kb_card_layout = QVBoxLayout(kb_card)
+        kb_card_layout.setContentsMargins(20, 20, 20, 20) 
+        kb_card_layout.setSpacing(10)
+
+        # Function to build rows dynamically based on the saved dictionary
+        def add_keybind_row(action_id, data, is_last=False):
+            row_widget = QWidget()
+            row_widget.setObjectName("transparentWidget")
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            
+            lbl = QLabel(data["label"])
+            lbl.setProperty("class", "cardTitle")
+            row_layout.addWidget(lbl)
+            row_layout.addStretch()
+            
+            toggle = QPushButton("Global" if data["is_global"] else "Local")
+            toggle.setProperty("class", "scopeToggle")
+            toggle.setCheckable(True)
+            toggle.setChecked(data["is_global"])
+            toggle.setCursor(Qt.PointingHandCursor)
+            toggle.setFixedWidth(65)
+            
+            key_edit = QKeySequenceEdit(QKeySequence(data["key"]))
+            key_edit.setFixedWidth(180) 
+            
+            # Connect Signals to Save Logic
+            toggle.toggled.connect(lambda checked, t=toggle, a=action_id: [t.setText("Global" if checked else "Local"), self.update_keybind_scope(a, checked)])
+            key_edit.keySequenceChanged.connect(lambda seq, a=action_id: self.update_keybind_seq(a, seq.toString()))
+
+            row_layout.addWidget(toggle)
+            row_layout.addSpacing(10)
+            row_layout.addWidget(key_edit)
+            kb_card_layout.addWidget(row_widget)
+            
+            # Store references so the Reset button can edit them later
+            self.keybind_widgets[action_id] = {"edit": key_edit, "toggle": toggle}
+            
+            if not is_last:
+                divider = QFrame()
+                divider.setFixedHeight(1)
+                divider.setProperty("class", "rowDivider")
+                kb_card_layout.addWidget(divider)
+
+        # Dynamically draw rows based on current data
+        keys = list(self.current_keybinds.keys())
+        for i, action_id in enumerate(keys):
+            add_keybind_row(action_id, self.current_keybinds[action_id], is_last=(i == len(keys)-1))
+
+        kb_layout.addWidget(kb_card)
 
         # Build the Stack
         self.content_stack.addWidget(self.appearance_page)
         self.content_stack.addWidget(self.privacy_page)
+        self.content_stack.addWidget(self.keybinds_page)
 
-        # Connect Sidebar Buttons to Stack
+        # Connections
         self.nav_group.idClicked.connect(self.content_stack.setCurrentIndex)
-
-        # Connect Color Buttons
         self.btn_transparent.clicked.connect(lambda: self.color_changed.emit("transparent"))
         self.btn_purple.clicked.connect(lambda: self.color_changed.emit("rgba(45, 25, 65, 140)"))
         self.btn_blue.clicked.connect(lambda: self.color_changed.emit("rgba(15, 30, 50, 160)"))

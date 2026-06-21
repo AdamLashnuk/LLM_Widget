@@ -11,7 +11,7 @@ os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
 app = QApplication(sys.argv)
 
 # Prevents the app from terminating when hidden via the tray icon ---
-app.setQuitOnLastWindowClosed(False)
+app.setQuitOnLastWindowClosed(False) 
 
 # Create and show the floating bubble
 widget = FloatingWidget()
