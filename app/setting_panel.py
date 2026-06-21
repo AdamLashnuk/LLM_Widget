@@ -195,7 +195,7 @@ class SettingPanel(QWidget):
         card_layout.setContentsMargins(20, 20, 20, 20)
         card_layout.setSpacing(15) 
         
-        resize_title = QLabel("Window Resize Color")
+        resize_title = QLabel("Window Color")
         resize_title.setProperty("class", "cardTitle")
         card_layout.addWidget(resize_title)
 
