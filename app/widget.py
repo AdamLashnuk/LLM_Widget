@@ -1,17 +1,14 @@
 import os
-from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QPainter, QColor, QPixmap, QPainterPath
+from PySide6.QtWidgets import QWidget, QSystemTrayIcon, QMenu, QApplication
 from PySide6.QtCore import Qt, QPoint, QRect
+from PySide6.QtGui import QPainter, QColor, QPixmap, QPainterPath, QPen, QAction, QIcon
 from app.animation_window import AnimationWindow
-from PySide6.QtGui import QPen
 from app.chat_panel import ChatPanel
 
 
 class FloatingWidget(QWidget):
     def __init__(self):
         super().__init__()
-
 
         self.is_hovered = False
         self.chat_panel = ChatPanel(self)
@@ -22,6 +19,7 @@ class FloatingWidget(QWidget):
         self.animation_window.close_finished.connect(self.show_bubble_after_animation)
 
         self.setup_window()
+        self.setup_tray_icon()
 
     def setup_window(self):
         # Set a clean size for our circular widget
@@ -35,6 +33,107 @@ class FloatingWidget(QWidget):
         )
         self.setAttribute(Qt.WA_Hover)
         self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def setup_tray_icon(self):
+        logo_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets",
+            "portalbig.png"
+        )
+
+        # Initialize the tray icon
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(QIcon(logo_path))
+
+        # Create the right-click menu
+        self.tray_menu = QMenu()
+        
+        # Style the menu to match the dark theme
+        self.tray_menu.setStyleSheet("""
+            QMenu {
+                background-color: #1f1f1f;
+                border: 1px solid #333333;
+                border-radius: 8px;
+                padding: 4px;
+                color: #ececec;
+                font-family: "Segoe UI";
+            }
+            QMenu::item {
+                padding: 6px 16px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #333333;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #333333;
+                margin: 4px 8px;
+            }
+        """)
+
+        # 1. Show/Hide Action
+        self.toggle_action = QAction("Show / Hide Widget", self)
+        self.toggle_action.triggered.connect(self.toggle_widget)
+        self.tray_menu.addAction(self.toggle_action)
+
+        # 2. Settings Action
+        settings_action = QAction("Settings", self)
+        settings_action.triggered.connect(self.open_settings_directly)
+        self.tray_menu.addAction(settings_action)
+
+        self.tray_menu.addSeparator()
+
+        # 3. Quit Action
+        quit_action = QAction("Quit LLM Widget", self)
+        quit_action.triggered.connect(self.quit_app)
+        self.tray_menu.addAction(quit_action)
+
+        self.tray_icon.setContextMenu(self.tray_menu)
+        self.tray_icon.show()
+
+        # Allow left-clicking the tray icon to show/hide
+        self.tray_icon.activated.connect(self.on_tray_icon_activated)
+
+    def toggle_widget(self):
+        # If anything is on screen, hide it completely
+        if self.chat_panel.isVisible() or self.isVisible():
+            self.chat_panel.hide()
+            self.hide()
+        else:
+            # If everything is hidden, bring the bubble back
+            self.show()
+            self.raise_()
+
+    def open_settings_directly(self):
+        # --- NEW: If already open and showing settings, close it back to the bubble ---
+        if self.chat_panel.isVisible() and self.chat_panel.setting_panel.isVisible():
+            self.chat_panel.hide()
+            self.show()
+            self.raise_()
+            return
+
+        # If the chat panel is closed, instantly snap it open to avoid animation delays
+        if not self.chat_panel.isVisible():
+            self.hide()
+            target_x, target_y = self.calculate_chat_position()
+            self.chat_panel.move(target_x, target_y)
+            self.chat_panel.show()
+            self.chat_panel.raise_()
+        
+        # Force the settings panel to be the visible widget
+        self.chat_panel.content_stack.setCurrentWidget(self.chat_panel.setting_panel)
+        self.chat_panel.raise_()
+        self.chat_panel.activateWindow()
+
+    def quit_app(self):
+        self.tray_icon.hide() # Cleanup icon from tray before exit to prevent ghosts
+        QApplication.quit()
+
+    def on_tray_icon_activated(self, reason):
+        # Trigger equals a single Left Click
+        if reason == QSystemTrayIcon.Trigger:
+            self.toggle_widget()
 
     # Draw the circle directly on the widget
     def paintEvent(self, event):
@@ -57,7 +156,7 @@ class FloatingWidget(QWidget):
         logo_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "assets",
-            "portal.png"
+            "portalbig.png"
         )
 
         logo = QPixmap(logo_path)
@@ -77,7 +176,7 @@ class FloatingWidget(QWidget):
 
         painter.drawPixmap(x, y, scaled_logo)
 
-    def open_chat(self):
+    def calculate_chat_position(self):
         bubble_x = self.x()
         bubble_y = self.y()
 
@@ -88,7 +187,7 @@ class FloatingWidget(QWidget):
         target_x = bubble_x - 350
         target_y = bubble_y - 450
 
-        # Prevent it from clipping past the edges of the screen and make the chat panel open flushly against the edges of the screen
+        # Prevent it from clipping past the edges of the screen
         if target_y < screen.top():
             target_y = screen.top()
 
@@ -100,6 +199,11 @@ class FloatingWidget(QWidget):
 
         if target_x + panel_w > screen.right():
             target_x = screen.right() - panel_w
+            
+        return target_x, target_y
+
+    def open_chat(self):
+        target_x, target_y = self.calculate_chat_position()
         self.final_chat_x = target_x
         self.final_chat_y = target_y
 
@@ -144,7 +248,6 @@ class FloatingWidget(QWidget):
         self.chat_panel.show()
         self.chat_panel.raise_()
 
-
     def enterEvent(self, event):
         self.is_hovered = True
         self.update()
@@ -168,13 +271,7 @@ class FloatingWidget(QWidget):
             self.height()
         )
         # Route through ChatPanel's own method instead of touching
-        # chat_panel.browser directly. browser lives inside a
-        # QStackedWidget (content_stack) alongside the settings panel;
-        # calling browser.hide() directly bypasses the stack and leaves it
-        # thinking browser is still "current" while it's actually hidden —
-        # that mismatch is what caused the panel to reopen with a blank
-        # content area until something else (like clicking an LLM button)
-        # forced the stack to run setCurrentWidget() for real.
+        # chat_panel.browser directly. 
         self.chat_panel.reset_to_browser()
         self.chat_panel.hide()
         self.animation_window.shrink_from_to(start_rect, end_rect)

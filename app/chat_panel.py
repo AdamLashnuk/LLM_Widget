@@ -137,52 +137,31 @@ class ChatPanel(QWidget):
             QSizePolicy.Expanding,
             QSizePolicy.Expanding
         )
-        # No explicit hide() here — once create_layout() adds this to
-        # self.content_stack, the stack itself controls which of
-        # browser/setting_panel is visible via setCurrentWidget().
-
+        
         # Listen for the signal from the settings panel
         self.setting_panel.color_changed.connect(self.update_content_area_color)
+        
+        # --- NEW: Listen for the privacy clear data signal ---
+        self.setting_panel.clear_data_requested.connect(self.clear_browsing_data)
 
         # 2. THIS MUST COME LAST: It puts the widgets into the layout
         self.create_layout()
 
     def save_setting(self, key, value):
-        # QSettings normally only guarantees a write hits disk when the
-        # object is cleanly destroyed or sync() is called explicitly — Qt
-        # does NOT promise an immediate flush on setValue() alone. This app
-        # has no quit handler (closing the chat panel just hides it; the
-        # bubble keeps the process alive), so the only way these settings
-        # are likely to ever get a clean shutdown is if the OS itself
-        # terminates the process — and that can happen before the normal
-        # flush gets a chance to run. Calling sync() right after every
-        # write makes sure "Set as Default" (and everything else) actually
-        # survives the app being closed abruptly, not just a clean exit.
         self.settings.setValue(key, value)
         self.settings.sync()
 
     def setup_window(self):
-        self.setMinimumSize(400, 400) # Prevents the window from crashing if made too small
+        self.setMinimumSize(400, 400) 
         
         # Initialize QSettings and load the saved size
         self.settings = QSettings("MyLLMWidget", "ChatPanel")
         self.current_provider = self.settings.value("current_provider", "ChatGPT")
-        # current_provider_id is the preferred way to identify the default
-        # LLM (added alongside Rename/Delete/Duplicate/Set as Default) since
-        # current_provider alone (a name) can't disambiguate two entries
-        # with the same name, e.g. after using Duplicate. Falls back to
-        # name-matching below if no id was ever saved (older settings).
         self.current_provider_id = self.settings.value("current_provider_id", None)
         
-        # --- FIX: Load the custom LLM array explicitly BEFORE rendering widgets ---
         active_str = self.settings.value("active_llms")
         if active_str:
             self.active_llms = json.loads(active_str)
-            # Migration: entries saved before the "id" field existed (added
-            # for rename/delete/duplicate/set-default support) won't have
-            # one yet. Backfill so every entry has a stable identity that
-            # doesn't break if two entries end up sharing a name (e.g. via
-            # Duplicate).
             migrated = False
             for llm in self.active_llms:
                 if "id" not in llm:
@@ -201,7 +180,7 @@ class ChatPanel(QWidget):
         if saved_size:
             self.resize(saved_size)
         else:
-            self.resize(900, 700) # Default fallback size
+            self.resize(900, 700) 
 
         self.setWindowFlags(
             Qt.FramelessWindowHint |
@@ -211,7 +190,7 @@ class ChatPanel(QWidget):
 
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        self.setMouseTracking(True)   # Allows the program to watch the mouse move across borders
+        self.setMouseTracking(True)  
 
         self.setStyleSheet("""
             QWidget {
@@ -281,9 +260,8 @@ class ChatPanel(QWidget):
     def create_widgets(self):
         self.container = QFrame()
         self.container.setObjectName("mainContainer")
-        self.container.setMouseTracking(True) # Keeps border tracking active over the background
+        self.container.setMouseTracking(True) 
 
-        # --- HORIZONTAL SCROLL AREA FOR DYNAMIC BUTTONS ---
         self.scroll_area = HorizontalWheelScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -305,10 +283,6 @@ class ChatPanel(QWidget):
         self.llm_layout.setContentsMargins(0, 0, 0, 0)
         self.llm_layout.setSpacing(10)
 
-        # Add button — created here (before render_active_llms() runs)
-        # because render_active_llms() places it inside self.llm_layout,
-        # right after the last LLM button, so it scrolls along with them
-        # and always appears immediately after whichever LLM was added last.
         self.add_button = QPushButton("+")
         self.add_button.setObjectName("addButton")
         self.add_button.setFixedSize(26, 26)
@@ -322,20 +296,17 @@ class ChatPanel(QWidget):
         self.close_button.setFixedSize(32, 32)
         self.close_button.clicked.connect(self.close_panel)
 
-        # Settings button
         self.settings_button = QPushButton()
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setFixedSize(32, 32)
         self.settings_button.clicked.connect(self.open_settings)
 
-        # Load and recolor the gear icon
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         icon_path = os.path.join(project_root, "assets", "gearsettings.png")
         
         icon_pixmap = QPixmap(icon_path)
         if not icon_pixmap.isNull():
             painter = QPainter(icon_pixmap)
-            # This line allows us to draw over the non-transparent parts of the PNG
             painter.setCompositionMode(QPainter.CompositionMode_SourceIn) 
             painter.fillRect(icon_pixmap.rect(), QColor("#b4b4b4"))
             painter.end()
@@ -343,25 +314,8 @@ class ChatPanel(QWidget):
             self.settings_button.setIcon(QIcon(icon_pixmap))
             self.settings_button.setIconSize(QSize(20, 20))
 
-        # Persistent logins stored in a local folder
         self.browser = QWebEngineView()
 
-        # QWebEngineView's sizeHint() can report a small default before its
-        # render widget finishes initializing/loading the first page, which
-        # can throw off QVBoxLayout's space distribution. Forcing
-        # Expanding/Expanding here makes the layout always give it 100% of
-        # leftover space, regardless of what its sizeHint reports.
-        #
-        # retainSizeWhenHidden=True is the critical part: during a resize
-        # drag, self.browser.hide() is called (see mousePressEvent) to avoid
-        # forcing Chromium to re-layout on every frame. By default, Qt
-        # removes a hidden widget from layout space calculations entirely —
-        # so the moment the browser hid, container_layout only had the
-        # fixed-height title_bar left to lay out inside the whole window,
-        # and centered it in the leftover space (the title bar "dropping to
-        # the middle" bug). Retaining its size means the layout keeps
-        # reserving the same space for it whether it's visible or not, so
-        # title_bar stays pinned to the top throughout the entire drag.
         browser_policy = self.browser.sizePolicy()
         browser_policy.setHorizontalPolicy(QSizePolicy.Expanding)
         browser_policy.setVerticalPolicy(QSizePolicy.Expanding)
@@ -377,10 +331,6 @@ class ChatPanel(QWidget):
         self.page = QWebEnginePage(self.profile, self.browser)
         self.browser.setPage(self.page)
 
-        # Set default URL based on saved provider.
-        # Prefer matching by id (set via "Set as Default" in the right-click
-        # menu) since it's stable even across duplicate names; fall back to
-        # name-matching for settings saved before ids existed.
         start_url = "https://chatgpt.com"
         match = None
         if self.current_provider_id:
@@ -392,31 +342,19 @@ class ChatPanel(QWidget):
         self.browser.setUrl(QUrl(start_url))
 
     def render_active_llms(self):
-        # Clear everything from the layout before rebuilding — both widgets
-        # and non-widget items like the trailing stretch. takeAt() removes
-        # the item from the layout regardless of its type; only widgets
-        # need setParent(None) afterward so they're not deleted (add_button
-        # is reused, not recreated, on every call).
         while self.llm_layout.count():
             item = self.llm_layout.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.setParent(None)
 
-        # Build buttons from the array memory
         for llm in self.active_llms:
             btn = QPushButton(llm["name"])
-            # Lambda uses default arguments to securely capture the variable at render time
             btn.clicked.connect(
                 lambda checked=False, name=llm["name"], url=llm["url"], llm_id=llm["id"]:
                     self.open_llm_url(name, url, llm_id)
             )
 
-            # Right-click opens a context menu with Rename / Duplicate /
-            # Set as Default / Delete for this specific entry. Left-click
-            # is already taken (opens the LLM), so right-click is the
-            # natural place for "more options on this item" — same pattern
-            # as browser tabs and file managers.
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
             btn.customContextMenuRequested.connect(
                 lambda pos, button=btn, llm_id=llm["id"]:
@@ -425,36 +363,16 @@ class ChatPanel(QWidget):
 
             self.llm_layout.addWidget(btn, alignment=Qt.AlignVCenter)
 
-        # The "+" button always goes right after the last LLM button.
         self.llm_layout.addWidget(self.add_button, alignment=Qt.AlignVCenter)
-
-        # Soaks up any leftover space inside llm_container so the buttons
-        # stay packed on the left instead of being centered when the
-        # scroll area's viewport is wider than the buttons need.
         self.llm_layout.addStretch()
 
     def show_llm_context_menu(self, button, llm_id):
         menu = QMenu(self)
         menu.setStyleSheet("""
-            QMenu {
-                background-color: #1f1f1f;
-                border: 1px solid #333333;
-                border-radius: 8px;
-                padding: 4px;
-                color: #ececec;
-            }
-            QMenu::item {
-                padding: 6px 16px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #333333;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: #333333;
-                margin: 4px 8px;
-            }
+            QMenu { background-color: #1f1f1f; border: 1px solid #333333; border-radius: 8px; padding: 4px; color: #ececec; }
+            QMenu::item { padding: 6px 16px; border-radius: 4px; }
+            QMenu::item:selected { background-color: #333333; }
+            QMenu::separator { height: 1px; background: #333333; margin: 4px 8px; }
         """)
 
         rename_action = menu.addAction("Rename")
@@ -463,47 +381,34 @@ class ChatPanel(QWidget):
         menu.addSeparator()
         delete_action = menu.addAction("Delete")
 
-        # Disable "Set as Default" if this entry already is the default —
-        # nothing to do, and it's clearer feedback than letting it silently
-        # no-op.
         if llm_id == self.current_provider_id:
             default_action.setEnabled(False)
             default_action.setText("Set as Default ✓")
 
         chosen = menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 
-        if chosen == rename_action:
-            self.rename_llm_entry(llm_id)
-        elif chosen == duplicate_action:
-            self.duplicate_llm_entry(llm_id)
-        elif chosen == default_action:
-            self.set_default_llm_entry(llm_id)
-        elif chosen == delete_action:
-            self.delete_llm_entry(llm_id)
+        if chosen == rename_action: self.rename_llm_entry(llm_id)
+        elif chosen == duplicate_action: self.duplicate_llm_entry(llm_id)
+        elif chosen == default_action: self.set_default_llm_entry(llm_id)
+        elif chosen == delete_action: self.delete_llm_entry(llm_id)
 
     def _find_llm_index(self, llm_id):
         for i, llm in enumerate(self.active_llms):
-            if llm["id"] == llm_id:
-                return i
+            if llm["id"] == llm_id: return i
         return -1
 
     def rename_llm_entry(self, llm_id):
         index = self._find_llm_index(llm_id)
-        if index == -1:
-            return
+        if index == -1: return
 
         old_name = self.active_llms[index]["name"]
         new_name, ok = QInputDialog.getText(self, "Rename", "New name:", text=old_name)
         new_name = new_name.strip()
 
-        if not ok or not new_name or new_name == old_name:
-            return
+        if not ok or not new_name or new_name == old_name: return
 
         self.active_llms[index]["name"] = new_name
 
-        # If this entry happens to be the saved default, keep the display
-        # name in sync (current_provider is matched on name as a fallback
-        # for settings saved before current_provider_id existed).
         if llm_id == self.current_provider_id:
             self.current_provider = new_name
             self.save_setting("current_provider", self.current_provider)
@@ -513,17 +418,10 @@ class ChatPanel(QWidget):
 
     def duplicate_llm_entry(self, llm_id):
         index = self._find_llm_index(llm_id)
-        if index == -1:
-            return
+        if index == -1: return
 
         original = self.active_llms[index]
-        copy_entry = {
-            "id": str(uuid.uuid4()),
-            "name": original["name"],
-            "url": original["url"],
-        }
-        # Insert right after the original, not just appended at the end,
-        # so the duplicate is easy to find.
+        copy_entry = {"id": str(uuid.uuid4()), "name": original["name"], "url": original["url"]}
         self.active_llms.insert(index + 1, copy_entry)
 
         self.save_setting("active_llms", json.dumps(self.active_llms))
@@ -531,8 +429,7 @@ class ChatPanel(QWidget):
 
     def set_default_llm_entry(self, llm_id):
         index = self._find_llm_index(llm_id)
-        if index == -1:
-            return
+        if index == -1: return
 
         entry = self.active_llms[index]
         self.current_provider = entry["name"]
@@ -540,21 +437,15 @@ class ChatPanel(QWidget):
         self.save_setting("current_provider", self.current_provider)
         self.save_setting("current_provider_id", self.current_provider_id)
 
-        # Re-render so the "Set as Default ✓" disabled state in the context
-        # menu reflects the new default immediately on next right-click.
         self.render_active_llms()
 
     def delete_llm_entry(self, llm_id):
         index = self._find_llm_index(llm_id)
-        if index == -1:
-            return
+        if index == -1: return
 
         entry = self.active_llms[index]
         del self.active_llms[index]
 
-        # If we just deleted the default entry, fall back to the first
-        # remaining LLM (if any) rather than leaving a dangling reference
-        # to an id that no longer exists.
         if llm_id == self.current_provider_id:
             if self.active_llms:
                 fallback = self.active_llms[0]
@@ -569,10 +460,6 @@ class ChatPanel(QWidget):
         self.save_setting("active_llms", json.dumps(self.active_llms))
         self.render_active_llms()
 
-        # If the LLM being viewed right now was the one just deleted, swap
-        # the browser over to whatever the (possibly new) default is, so
-        # the panel isn't left showing a page for an entry that no longer
-        # exists in the bar.
         if entry["name"] == self.current_provider and self.active_llms:
             self.browser.setUrl(QUrl(self.active_llms[0]["url"]))
 
@@ -580,15 +467,12 @@ class ChatPanel(QWidget):
         dialog = AddLLMDialog(self)
         dialog.llm_selected.connect(self.add_llm_to_bar)
         
-        # Position popup directly under the + button
         button_pos = self.add_button.mapToGlobal(QPoint(0, self.add_button.height()))
         dialog.move(button_pos.x() - (dialog.width() // 2), button_pos.y() + 5)
         dialog.exec()
 
     def add_llm_to_bar(self, name, url):
-        # Prevent duplicates
-        if any(llm["name"] == name for llm in self.active_llms):
-            return
+        if any(llm["name"] == name for llm in self.active_llms): return
         
         self.active_llms.append({"id": str(uuid.uuid4()), "name": name, "url": url})
         self.save_setting("active_llms", json.dumps(self.active_llms))
@@ -600,9 +484,7 @@ class ChatPanel(QWidget):
         self.title_bar.setFixedHeight(45)
 
         top_bar.setContentsMargins(18, 4, 18, 4)
-
         top_bar.addWidget(self.scroll_area, alignment=Qt.AlignVCenter)
-
         top_bar.addStretch()
         top_bar.addWidget(self.settings_button, alignment=Qt.AlignVCenter)
         top_bar.addWidget(self.close_button, alignment=Qt.AlignVCenter)
@@ -613,41 +495,26 @@ class ChatPanel(QWidget):
         self.title_bar.setLayout(top_bar)
         container_layout.addWidget(self.title_bar)
 
-        # The browser and settings panel need to occupy the exact same
-        # region (covering the whole panel below the title bar), with only
-        # one visible at a time — not stacked one above the other as
-        # vertical siblings, which was squashing the settings panel into
-        # whatever leftover space was left below the (always space-
-        # reserving) browser. A QStackedWidget shows exactly one child at a
-        # time, each given the stack's full size, which is exactly this.
         self.content_stack = QStackedWidget()
         self.content_stack.addWidget(self.browser)
         self.content_stack.addWidget(self.setting_panel)
         self.content_stack.setCurrentWidget(self.browser)
 
         container_layout.addWidget(self.content_stack, 1)
-
         self.container.setLayout(container_layout)
 
-        # Apply initial layout background color directly to mainContainer shell
         saved_color = self.settings.value("resize_color", "transparent")
         self.container.setStyleSheet(f"QFrame#mainContainer {{ background-color: {saved_color}; border: 1px solid rgba(255, 255, 255, 20); border-radius: 24px; }}")
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(self.container)
-
         self.setLayout(main_layout)
 
     def show_browser(self):
         self.content_stack.setCurrentWidget(self.browser)
 
     def open_llm_url(self, name, url, llm_id=None):
-        # Clicking an LLM just loads it into the browser for this session —
-        # it no longer touches current_provider/current_provider_id. Those
-        # are only changed by the explicit "Set as Default" action in the
-        # right-click menu now, so opening ChatGPT to check something
-        # doesn't silently change what launches next time the app starts.
         self.show_browser()
         self.browser.setUrl(QUrl(url))
 
@@ -662,8 +529,22 @@ class ChatPanel(QWidget):
         self.container.setStyleSheet(f"QFrame#mainContainer {{ background-color: {new_color}; border: 1px solid rgba(255, 255, 255, 20); border-radius: 24px; }}")
         self.save_setting("resize_color", new_color)
 
+    # --- NEW: Function to execute Chromium cache clear ---
+    def clear_browsing_data(self):
+        # Clears all persistent cookies from the session_data folder
+        self.profile.cookieStore().deleteAllCookies()
+        # Wipes all cached website files/images
+        self.profile.clearHttpCache()
+        # Instantly reloads the browser view so the user can verify they are logged out
+        self.browser.reload()
+        
+        # After wiping data, snap back to the browser so the user can see the login screen again
+        self.show_browser()
+        # Reset the sidebar toggle back to Appearance for the next time settings is opened
+        self.setting_panel.appearance_btn.setChecked(True)
+        self.setting_panel.content_stack.setCurrentIndex(0)
+
     def hideEvent(self, event):
-        # Automatically save the current size to QSettings whenever the panel disappears.
         self.save_setting("window_size", self.size())
         super().hideEvent(event)
 
@@ -673,11 +554,10 @@ class ChatPanel(QWidget):
         else:
             self.content_stack.setCurrentWidget(self.setting_panel)
     
-    # Resize logic
     def get_resize_direction(self, pos):
         w = self.width()
         h = self.height()
-        margin = 16 # Large margin to easily catch the 24px rounded corners
+        margin = 16 
         x, y = pos.x(), pos.y()
 
         left = x < margin
@@ -719,17 +599,6 @@ class ChatPanel(QWidget):
                 self.initial_global_pos = event.globalPosition().toPoint()
                 self.pending_geometry = None
 
-                # The browser is a separate Chromium process — hiding/disabling
-                # it doesn't stop it from re-rendering on every resize. So
-                # instead we swap it out for the solid background
-                # for the duration of the drag, and only show it again once
-                # the resize is finished and the timer has stopped.
-                #
-                # Only do this if the browser is actually the active page —
-                # if settings are open, the browser is already hidden by
-                # content_stack and should stay that way; forcing it to
-                # show() again on release was the cause of the browser
-                # appearing to "stack on top of" settings after a resize.
                 self.browser_was_active_before_resize = (
                     self.content_stack.currentWidget() is self.browser
                 )
@@ -740,10 +609,6 @@ class ChatPanel(QWidget):
 
                 event.accept()
             else:
-                # Dynamic dragging
-                # Any click that wasn't on a corner (resize), a button, or the browser 
-                # will fall to here. This dynamically makes the entire top bar 
-                # draggable without any hardcoded numbers.
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 event.accept()
 
@@ -755,48 +620,36 @@ class ChatPanel(QWidget):
             return
 
         if self.resize_direction:
-            # Calculate exactly how many pixels the mouse has traveled since clicking
             delta = event.globalPosition().toPoint() - self.initial_global_pos
             geom = self.initial_geometry
             
-            # Start with current dimensions as base
             left, top, width, height = geom.left(), geom.top(), geom.width(), geom.height()
             min_w, min_h = self.minimumWidth(), self.minimumHeight()
 
-            # --- PRECISE DIRECTION MATH ---
-            # Right Edge / Bottom Right / Top Right
             if self.resize_direction in (Qt.RightSection, Qt.BottomRightSection, Qt.TopRightSection):
                 width = max(min_w, geom.width() + delta.x())
                 
-            # Bottom Edge / Bottom Right / Bottom Left
             if self.resize_direction in (Qt.BottomSection, Qt.BottomRightSection, Qt.BottomLeftSection):
                 height = max(min_h, geom.height() + delta.y())
 
-            # Top Edge / Top Left
             if self.resize_direction in (Qt.TopSection, Qt.TopLeftSection):
                 max_delta_y = geom.height() - min_h
                 actual_delta_y = min(delta.y(), max_delta_y)
                 top = geom.top() + actual_delta_y
                 height = geom.height() - actual_delta_y
 
-            # Left Edge / Top Left / Bottom Left
             if self.resize_direction in (Qt.LeftSection, Qt.TopLeftSection, Qt.BottomLeftSection):
                 max_delta_x = geom.width() - min_w
                 actual_delta_x = min(delta.x(), max_delta_x)
                 left = geom.left() + actual_delta_x
                 width = geom.width() - actual_delta_x
 
-            # Special Case: Top Right Corner (Changes height/top, but anchors 'left' completely)
             if self.resize_direction == Qt.TopRightSection:
                 max_delta_y = geom.height() - min_h
                 actual_delta_y = min(delta.y(), max_delta_y)
                 top = geom.top() + actual_delta_y
                 height = geom.height() - actual_delta_y
 
-            # Don't resize the window directly here — just record the target
-            # geometry. The resize_timer picks this up at a steady ~60fps,
-            # so a burst of mouse events between frames only results in one
-            # resize instead of many.
             target_rect = (left, top, width, height)
             if self.geometry().getRect() != target_rect:
                 self.pending_geometry = target_rect
@@ -808,9 +661,6 @@ class ChatPanel(QWidget):
             event.accept()
 
     def apply_pending_geometry(self):
-        # Called by resize_timer at ~60fps while a resize drag is active.
-        # Only touches the window geometry — the browser stays hidden and
-        # untouched until the drag finishes, so this stays cheap.
         if self.pending_geometry is not None:
             left, top, width, height = self.pending_geometry
             self.setGeometry(left, top, width, height)
@@ -821,16 +671,9 @@ class ChatPanel(QWidget):
 
         if self.resize_direction:
             self.resize_direction = None
-
-            # Stop throttling and make sure the final geometry is applied
-            # (in case the last move landed between timer ticks).
             self.resize_timer.stop()
             self.apply_pending_geometry()
 
-            # Resume the browser now that resizing is done, so it only
-            # has to re-layout once at the final size instead of on
-            # every frame of the drag — but only if it was actually the
-            # active page when the drag started (see mousePressEvent).
             if getattr(self, "browser_was_active_before_resize", False):
                 self.browser.show()
 
