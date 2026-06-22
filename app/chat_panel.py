@@ -456,6 +456,15 @@ class ChatPanel(QWidget):
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
 
         self.page = QWebEnginePage(self.profile, self.browser)
+
+        # --- FIX MICROPHONE PERMISSION (PySide6 Corrected) ---
+        def grant_feature_permission(origin, feature):
+            # PySide6 groups microphone access under Feature.MediaAudioCapture
+            if feature == QWebEnginePage.Feature.MediaAudioCapture:
+                self.page.setFeaturePermission(origin, feature, QWebEnginePage.PermissionPolicy.PermissionGrantedByUser)
+                
+        self.page.featurePermissionRequested.connect(grant_feature_permission)
+
         self.browser.setPage(self.page)
 
         start_url = "https://chatgpt.com"
