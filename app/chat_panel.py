@@ -131,6 +131,7 @@ class ChatPanel(QWidget):
         self.hotkey_bridge.trigger.connect(self.execute_hotkey_action)
 
         self.setup_window()
+        self.setup_animation_pool()
         self.create_widgets()
 
         self.setting_panel = SettingPanel()
@@ -429,15 +430,11 @@ class ChatPanel(QWidget):
         self.settings_button.clicked.connect(self.open_settings)
 
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        icon_path = os.path.join(project_root, "assets", "gearsettings.png")
+        icon_path = os.path.join(project_root, "assets", "gearsettingsgrey.png")
 
         icon_pixmap = QPixmap(icon_path)
         if not icon_pixmap.isNull():
-            painter = QPainter(icon_pixmap)
-            painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-            painter.fillRect(icon_pixmap.rect(), QColor("#b4b4b4"))
-            painter.end()
-
+            # Directly apply the image without the QPainter recoloring overhead
             self.settings_button.setIcon(QIcon(icon_pixmap))
             self.settings_button.setIconSize(QSize(20, 20))
 
@@ -645,9 +642,74 @@ class ChatPanel(QWidget):
         self.save_setting("active_llms", json.dumps(self.active_llms))
         self.render_active_llms()
 
+    def setup_animation_pool(self):
+        # 1. Drop Animation Widget
+        self.pool_drop = QLabel(self)
+        self.pool_drop.setFixedSize(14, 14)
+        self.pool_drop.setStyleSheet("QLabel { background-color: #ececec; border-radius: 7px; }")
+        self.pool_drop.hide()
+        self.pool_drop_opacity = QGraphicsOpacityEffect(self.pool_drop)
+        self.pool_drop.setGraphicsEffect(self.pool_drop_opacity)
+
+        # 2. Ripple Animation Widget
+        self.pool_ripple = QLabel(self)
+        self.pool_ripple.setStyleSheet("QLabel { background-color: transparent; border: 2px solid rgba(165, 120, 255, 180); border-radius: 5px; }")
+        self.pool_ripple.hide()
+        self.pool_ripple_opacity = QGraphicsOpacityEffect(self.pool_ripple)
+        self.pool_ripple.setGraphicsEffect(self.pool_ripple_opacity)
+
+        # 3. Splash Dots (for add animation)
+        self.pool_splash_dots = []
+        for i in range(6):
+            size = 6 if i % 2 else 8
+            radius = size // 2
+            dot = QLabel(self)
+            dot.setFixedSize(size, size)
+            dot.setStyleSheet(f"QLabel {{ background-color: rgba(170, 125, 255, 220); border: 1px solid rgba(235, 225, 255, 180); border-radius: {radius}px; }}")
+            dot.hide()
+            opacity = QGraphicsOpacityEffect(dot)
+            dot.setGraphicsEffect(opacity)
+            self.pool_splash_dots.append((dot, opacity))
+
+        # 4. Pop Dots (for delete animation)
+        self.pool_pop_dots = []
+        for i in range(6):
+            size = 4 if i % 2 else 5
+            radius = size // 2
+            dot = QLabel(self)
+            dot.setFixedSize(size, size)
+            dot.setStyleSheet(f"QLabel {{ background-color: rgba(170, 125, 255, 220); border: 1px solid rgba(235, 225, 255, 180); border-radius: {radius}px; }}")
+            dot.hide()
+            opacity = QGraphicsOpacityEffect(dot)
+            dot.setGraphicsEffect(opacity)
+            self.pool_pop_dots.append((dot, opacity))
+
+        # 5. Clones for morphing tabs
+        self.pool_ghost_btn = QPushButton(self)
+        self.pool_ghost_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #303030;
+                color: #ececec;
+                border: 1px solid #444444;
+                border-radius: 10px;
+                padding: 8px 14px;
+                font-size: 14px;
+                font-family: "Segoe UI";
+            }
+        """)
+        self.pool_ghost_btn.hide()
+        self.pool_ghost_opacity = QGraphicsOpacityEffect(self.pool_ghost_btn)
+        self.pool_ghost_btn.setGraphicsEffect(self.pool_ghost_opacity)
+
+        self.pool_tab_clone = QPushButton(self)
+        self.pool_tab_clone.hide()
+
+        self.pool_plus_clone = QPushButton("+", self)
+        self.pool_plus_clone.setObjectName("addButton")
+        self.pool_plus_clone.hide()
+
     def play_delete_pop_animation(self, llm_id):
         button = self.llm_buttons.get(llm_id)
-
         if not button:
             self.finish_delete_llm_entry(llm_id)
             return
@@ -667,24 +729,14 @@ class ChatPanel(QWidget):
         button.setGraphicsEffect(button_opacity)
         button_opacity.setOpacity(0.0)
 
-        ghost = QPushButton(button.text(), self)
+        # --- USE POOL ---
+        ghost = self.pool_ghost_btn
+        ghost.setText(button.text())
         ghost.setGeometry(button_rect)
-        ghost.setStyleSheet("""
-            QPushButton {
-                background-color: #303030;
-                color: #ececec;
-                border: 1px solid #444444;
-                border-radius: 10px;
-                padding: 8px 14px;
-                font-size: 14px;
-                font-family: "Segoe UI";
-            }
-        """)
+        self.pool_ghost_opacity.setOpacity(1.0)
         ghost.show()
         ghost.raise_()
-
-        ghost_opacity = QGraphicsOpacityEffect(ghost)
-        ghost.setGraphicsEffect(ghost_opacity)
+        ghost_opacity = self.pool_ghost_opacity
 
         start_rect = QRect(button_rect)
 
@@ -732,7 +784,13 @@ class ChatPanel(QWidget):
         pop_dots = []
 
         for i, offset in enumerate(pop_offsets):
-            dot, dot_opacity = self.make_splash_dot(center, 4 if i % 2 else 5)
+            # --- USE POOL ---
+            dot, dot_opacity = self.pool_pop_dots[i]
+            dot.move(center.x() - (dot.width() // 2), center.y() - (dot.height() // 2))
+            dot_opacity.setOpacity(1.0)
+            dot.show()
+            dot.raise_()
+            
             pop_dots.append(dot)
 
             end_rect = QRect(
@@ -778,9 +836,9 @@ class ChatPanel(QWidget):
             particle_group.start()
 
         def start_slide_after_pause():
-            ghost.deleteLater()
+            ghost.hide() # <--- HIDE INSTEAD OF DELETE
             for dot in pop_dots:
-                dot.deleteLater()
+                dot.hide() # <--- HIDE INSTEAD OF DELETE
             QTimer.singleShot(180, collapse_group.start)
 
         def finish_delete():
@@ -827,14 +885,10 @@ class ChatPanel(QWidget):
 
         self.add_button.setEnabled(False)
 
-        drop = QLabel(self)
-        drop.setFixedSize(14, 14)
-        drop.setStyleSheet("""
-            QLabel {
-                background-color: #ececec;
-                border-radius: 7px;
-            }
-        """)
+        # --- USE POOL ---
+        drop = self.pool_drop
+        opacity = self.pool_drop_opacity
+        opacity.setOpacity(1.0)
 
         drop_start = QRect(plus_center.x() - 7, plus_center.y() - 70, 14, 14)
         drop_end = QRect(plus_center.x() - 4, plus_center.y() - 4, 8, 8)
@@ -842,9 +896,6 @@ class ChatPanel(QWidget):
         drop.setGeometry(drop_start)
         drop.show()
         drop.raise_()
-
-        opacity = QGraphicsOpacityEffect(drop)
-        drop.setGraphicsEffect(opacity)
 
         drop_move = QPropertyAnimation(drop, b"geometry")
         drop_move.setDuration(280)
@@ -863,55 +914,29 @@ class ChatPanel(QWidget):
         drop_group.addAnimation(drop_fade)
 
         def after_drop():
-            drop.deleteLater()
+            drop.hide() # <--- HIDE INSTEAD OF DELETE
             self.active_llms.append(new_llm)
             self.save_setting("active_llms", json.dumps(self.active_llms))
             self.render_active_llms()
             
-            # Spin up the new browser in the background
             self.add_browser_to_stack(new_llm["id"], new_llm["url"]) 
-            
             QTimer.singleShot(0, lambda: self.play_plus_to_tab_animation(old_plus_rect, new_llm["id"]))
         
         drop_group.finished.connect(after_drop)
         self.tab_animations.append(drop_group)
         drop_group.start()
 
-    def make_splash_dot(self, center, size=7):
-        dot = QLabel(self)
-        dot.setFixedSize(size, size)
-        radius = size // 2
-        dot.setStyleSheet(f"""
-            QLabel {{
-                background-color: rgba(170, 125, 255, 220);
-                border: 1px solid rgba(235, 225, 255, 180);
-                border-radius: {radius}px;
-            }}
-        """)
-        dot.move(center.x() - radius, center.y() - radius)
-        dot.show()
-        dot.raise_()
-        opacity = QGraphicsOpacityEffect(dot)
-        dot.setGraphicsEffect(opacity)
-        return dot, opacity
-
     def play_water_splash(self, old_plus_rect, plus_center, new_llm):
-        ripple = QLabel(self)
-        ripple.setStyleSheet("""
-            QLabel {
-                background-color: transparent;
-                border: 2px solid rgba(165, 120, 255, 180);
-                border-radius: 5px;
-            }
-        """)
+        # --- USE POOL ---
+        ripple = self.pool_ripple
+        ripple_opacity = self.pool_ripple_opacity
+        ripple_opacity.setOpacity(0.9)
+
         ripple_start = QRect(plus_center.x() - 5, plus_center.y() - 5, 10, 10)
         ripple_end = QRect(plus_center.x() - 28, plus_center.y() - 28, 56, 56)
         ripple.setGeometry(ripple_start)
         ripple.show()
         ripple.raise_()
-
-        ripple_opacity = QGraphicsOpacityEffect(ripple)
-        ripple.setGraphicsEffect(ripple_opacity)
 
         ripple_grow = QPropertyAnimation(ripple, b"geometry")
         ripple_grow.setDuration(240)
@@ -936,8 +961,14 @@ class ChatPanel(QWidget):
 
         splash_widgets = [ripple]
         for i, offset in enumerate(splash_offsets):
-            dot, opacity = self.make_splash_dot(plus_center, 6 if i % 2 else 8)
+            # --- USE POOL ---
+            dot, opacity = self.pool_splash_dots[i]
             splash_widgets.append(dot)
+
+            dot.move(plus_center.x() - (dot.width() // 2), plus_center.y() - (dot.height() // 2))
+            opacity.setOpacity(1.0)
+            dot.show()
+            dot.raise_()
 
             dot_end = QRect(
                 plus_center.x() + offset.x(),
@@ -966,14 +997,12 @@ class ChatPanel(QWidget):
             self.save_setting("active_llms", json.dumps(self.active_llms))
             self.render_active_llms()
             
-            # Spin up the new browser in the background
             self.add_browser_to_stack(new_llm["id"], new_llm["url"]) 
-            
             self.play_plus_to_tab_animation(old_plus_rect, new_llm["id"])
 
         def cleanup_splash():
             for widget in splash_widgets:
-                widget.deleteLater()
+                widget.hide() # <--- HIDE INSTEAD OF DELETE
 
         splash_group.finished.connect(cleanup_splash)
         self.tab_animations.append(splash_group)
@@ -991,13 +1020,14 @@ class ChatPanel(QWidget):
         new_tab.hide()
         self.add_button.hide()
 
-        tab_clone = QPushButton(new_tab.text(), self)
+        # --- USE POOL ---
+        tab_clone = self.pool_tab_clone
+        tab_clone.setText(new_tab.text())
         tab_clone.setGeometry(old_plus_rect)
         tab_clone.show()
         tab_clone.raise_()
 
-        plus_clone = QPushButton("+", self)
-        plus_clone.setObjectName("addButton")
+        plus_clone = self.pool_plus_clone
         plus_clone.setFixedSize(self.add_button.size())
         plus_clone.setGeometry(old_plus_rect)
         plus_clone.show()
@@ -1020,8 +1050,8 @@ class ChatPanel(QWidget):
         group.addAnimation(plus_anim)
 
         def finish():
-            tab_clone.deleteLater()
-            plus_clone.deleteLater()
+            tab_clone.hide() # <--- HIDE INSTEAD OF DELETE
+            plus_clone.hide() # <--- HIDE INSTEAD OF DELETE
             new_tab.show()
             self.add_button.show()
             self.add_button.setEnabled(True)

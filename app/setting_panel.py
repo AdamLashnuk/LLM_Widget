@@ -279,11 +279,7 @@ class SettingPanel(QWidget):
             logo_pixmap = QPixmap(icon_path)
             
             if not logo_pixmap.isNull():
-                target_bg_color = QColor(245, 245, 245)
-                
-                mask = logo_pixmap.createMaskFromColor(target_bg_color, Qt.MaskInColor)
-                logo_pixmap.setMask(mask)
-                
+                # Directly apply the image since the background is already transparent
                 icon_label.setPixmap(logo_pixmap.scaled(32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
         title = QLabel("Settings")
