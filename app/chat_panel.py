@@ -13,7 +13,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 
 from app.setting_panel import SettingPanel
-
+from app.utils import get_asset_path
 
 # --- Safe thread bridge for global shortcuts ---
 class GlobalHotkeyBridge(QObject):
@@ -457,7 +457,7 @@ class ChatPanel(QWidget):
         self.multitask_button.clicked.connect(self.open_multitask_prompt)
 
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        icon_path = os.path.join(project_root, "assets", "gearsettingsgrey.png")
+        icon_path = get_asset_path(os.path.join("assets", "gearsettingsgrey.png"))
 
         icon_pixmap = QPixmap(icon_path)
         if not icon_pixmap.isNull():

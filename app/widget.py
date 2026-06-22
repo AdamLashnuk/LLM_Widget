@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, QPoint, QRect, QSettings
 from PySide6.QtGui import QPainter, QColor, QPixmap, QPainterPath, QPen, QAction, QIcon, QCursor
 from app.animation_window import AnimationWindow
 from app.chat_panel import ChatPanel
-
+from app.utils import get_asset_path
 
 class FloatingWidget(QWidget):
     def __init__(self):
@@ -39,12 +39,7 @@ class FloatingWidget(QWidget):
         self.widget_position_mode = self.settings.value("widget_position_mode", "free")
         self.apply_widget_position_mode()
 
-        # --- OPTIMIZATION: Pre-load and cache the logo image ---
-        logo_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "assets",
-            "portalbig.png"
-        )
+        logo_path = get_asset_path(os.path.join("assets", "portalbig.png"))
         
         logo = QPixmap(logo_path)
         if not logo.isNull():
@@ -117,11 +112,7 @@ class FloatingWidget(QWidget):
         return self.pos()
 
     def setup_tray_icon(self):
-        logo_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "assets",
-            "portalbig.png"
-        )
+        logo_path = get_asset_path(os.path.join("assets", "portalbig.png"))
 
         # Initialize the tray icon
         self.tray_icon = QSystemTrayIcon(self)

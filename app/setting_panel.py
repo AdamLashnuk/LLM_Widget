@@ -6,6 +6,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
 from PySide6.QtCore import Qt, Signal, QSettings
 from PySide6.QtGui import QPixmap, QColor, QImage, QKeySequence, QPainter, QBrush
 
+from app.utils import get_asset_path
+
 DEFAULT_KEYBINDS = {
     "summon": {"label": "Summon Panel", "key": "Ctrl+Space", "is_global": True},
     "hide": {"label": "Hide Panel", "key": "Esc", "is_global": False},
@@ -273,7 +275,7 @@ class SettingPanel(QWidget):
         header_layout.setContentsMargins(10, 0, 0, 0)
 
         icon_label = QLabel()
-        icon_path = os.path.join(project_root, "assets", "portalbig.png")
+        icon_path = get_asset_path(os.path.join("assets", "portalbig.png"))
         
         if os.path.exists(icon_path):
             logo_pixmap = QPixmap(icon_path)
