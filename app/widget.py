@@ -39,6 +39,24 @@ class FloatingWidget(QWidget):
         self.widget_position_mode = self.settings.value("widget_position_mode", "free")
         self.apply_widget_position_mode()
 
+        # --- OPTIMIZATION: Pre-load and cache the logo image ---
+        logo_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets",
+            "portalbig.png"
+        )
+        
+        logo = QPixmap(logo_path)
+        if not logo.isNull():
+            self.cached_logo = logo.scaled(
+                85,
+                85,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+        else:
+            self.cached_logo = None
+
     def set_widget_position_mode(self, mode):
         self.widget_position_mode = mode
         self.settings.setValue("widget_position_mode", mode)
@@ -271,28 +289,11 @@ class FloatingWidget(QWidget):
                 20
             )
 
-        logo_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "assets",
-            "portalbig.png"
-        )
-
-        logo = QPixmap(logo_path)
-
-        if logo.isNull():
-            return
-
-        scaled_logo = logo.scaled(
-            85,
-            85,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
-        )
-
-        x = (self.width() - scaled_logo.width()) // 2
-        y = (self.height() - scaled_logo.height()) // 2
-
-        painter.drawPixmap(x, y, scaled_logo)
+        # --- OPTIMIZATION: Draw the cached image from memory ---
+        if getattr(self, "cached_logo", None):
+            x = (self.width() - self.cached_logo.width()) // 2
+            y = (self.height() - self.cached_logo.height()) // 2
+            painter.drawPixmap(x, y, self.cached_logo)
 
     def calculate_chat_position(self):
         bubble_x = self.x()

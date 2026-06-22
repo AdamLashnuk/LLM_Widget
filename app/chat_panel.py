@@ -220,13 +220,13 @@ class ChatPanel(QWidget):
             self.cycle_next_llm()
 
         elif action_id == "quick_refresh":
-            # Standard fast reload (F5)
-            self.browser.reload()
-
+            if self.current_browser():
+                self.current_browser().reload()
+                
         elif action_id == "refresh":
-            # HARD reload: ignores cache to fix broken pages (Ctrl+R)
-            from PySide6.QtWebEngineCore import QWebEnginePage
-            self.browser.page().action(QWebEnginePage.ReloadAndBypassCache).trigger()
+            if self.current_browser():
+                from PySide6.QtWebEngineCore import QWebEnginePage
+                self.current_browser().page().action(QWebEnginePage.ReloadAndBypassCache).trigger()
 
         elif action_id == "pin_toggle":
             # 1. Check the current pin status of the chat panel
@@ -441,52 +441,72 @@ class ChatPanel(QWidget):
             self.settings_button.setIcon(QIcon(icon_pixmap))
             self.settings_button.setIconSize(QSize(20, 20))
 
-        self.browser = QWebEngineView()
+        # --- NEW BROWSER STACK SETUP ---
+        self.browser_stack = QStackedWidget()
+        self.browser_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) # Force expansion
+        self.browsers = {}
 
-        browser_policy = self.browser.sizePolicy()
-        browser_policy.setHorizontalPolicy(QSizePolicy.Expanding)
-        browser_policy.setVerticalPolicy(QSizePolicy.Expanding)
-        browser_policy.setRetainSizeWhenHidden(True)
-        self.browser.setSizePolicy(browser_policy)
-
-        self.profile = QWebEngineProfile("llm_profile", self.browser)
-
+        self.profile = QWebEngineProfile("llm_profile", self.browser_stack)
         storage_path = os.path.join(project_root, "session_data")
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
+        self.profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-        self.page = QWebEnginePage(self.profile, self.browser)
+        # Create a background browser for every saved LLM
+        for llm in self.active_llms:
+            self.add_browser_to_stack(llm["id"], llm["url"])
 
-        # --- FIX MICROPHONE PERMISSION (PySide6 Corrected) ---
+        # Set the active browser on startup
+        if self.current_provider_id and self.current_provider_id in self.browsers:
+            self.browser_stack.setCurrentWidget(self.browsers[self.current_provider_id])
+        elif self.active_llms:
+            self.browser_stack.setCurrentWidget(self.browsers[self.active_llms[0]["id"]])
+
+    def add_browser_to_stack(self, llm_id, url):
+        browser = QWebEngineView()
+        
+        browser_policy = browser.sizePolicy()
+        browser_policy.setHorizontalPolicy(QSizePolicy.Expanding)
+        browser_policy.setVerticalPolicy(QSizePolicy.Expanding)
+        browser_policy.setRetainSizeWhenHidden(True)
+        browser.setSizePolicy(browser_policy)
+
+        page = QWebEnginePage(self.profile, browser)
+
         def grant_feature_permission(origin, feature):
-            # PySide6 groups microphone access under Feature.MediaAudioCapture
             if feature == QWebEnginePage.Feature.MediaAudioCapture:
-                self.page.setFeaturePermission(origin, feature, QWebEnginePage.PermissionPolicy.PermissionGrantedByUser)
-                
-        self.page.featurePermissionRequested.connect(grant_feature_permission)
+                page.setFeaturePermission(origin, feature, QWebEnginePage.PermissionPolicy.PermissionGrantedByUser)
 
-        self.browser.setPage(self.page)
+        page.featurePermissionRequested.connect(grant_feature_permission)
+        browser.setPage(page)
+        browser.setUrl(QUrl(url))
 
-        start_url = "https://chatgpt.com"
-        match = None
-        if self.current_provider_id:
-            match = next((llm for llm in self.active_llms if llm.get("id") == self.current_provider_id), None)
-        if match is None:
-            match = next((llm for llm in self.active_llms if llm["name"] == self.current_provider), None)
-        if match:
-            start_url = match["url"]
-        self.browser.setUrl(QUrl(start_url))
+        self.browsers[llm_id] = browser
+        self.browser_stack.addWidget(browser)
+
+    def current_browser(self):
+        return self.browser_stack.currentWidget()
 
     def render_active_llms(self):
         self.llm_buttons = {}
 
-        while self.llm_layout.count():
-            item = self.llm_layout.takeAt(0)
+        # 1. Iterate backwards to delete tabs and stretches, LEAVING the + button untouched.
+        for i in reversed(range(self.llm_layout.count())):
+            item = self.llm_layout.itemAt(i)
             widget = item.widget()
-            if widget:
-                widget.setParent(None)
+            
+            # If it's empty space (stretch) or an old tab, destroy it
+            if not widget or widget != self.add_button:
+                self.llm_layout.takeAt(i)
+                if widget:
+                    widget.deleteLater()
 
-        for llm in self.active_llms:
+        # 2. CRITICAL FIX: If this is the first boot, the + button isn't in the layout yet!
+        if self.llm_layout.indexOf(self.add_button) == -1:
+            self.llm_layout.addWidget(self.add_button, alignment=Qt.AlignVCenter)
+
+        # 3. Insert fresh LLM tabs BEFORE the add_button
+        for i, llm in enumerate(self.active_llms):
             btn = QPushButton(llm["name"])
             btn.clicked.connect(
                 lambda checked=False, name=llm["name"], url=llm["url"], llm_id=llm["id"]:
@@ -500,10 +520,16 @@ class ChatPanel(QWidget):
             )
 
             self.llm_buttons[llm["id"]] = btn
-            self.llm_layout.addWidget(btn, alignment=Qt.AlignVCenter)
+            
+            # Insert at current index `i` (pushes the + button naturally to the right)
+            self.llm_layout.insertWidget(i, btn, alignment=Qt.AlignVCenter)
 
-        self.llm_layout.addWidget(self.add_button, alignment=Qt.AlignVCenter)
+        # 4. Add stretch space after everything is placed
         self.llm_layout.addStretch()
+        
+        # 5. Fail-safe reset
+        self.add_button.setEnabled(True)
+        self.add_button.show()
 
     def show_llm_context_menu(self, button, llm_id):
         menu = QMenu(self)
@@ -597,12 +623,19 @@ class ChatPanel(QWidget):
         deleting_current = llm_id == self.current_provider_id
         del self.active_llms[index]
 
+        # Purge the browser from memory
+        if llm_id in self.browsers:
+            browser_to_delete = self.browsers.pop(llm_id)
+            self.browser_stack.removeWidget(browser_to_delete)
+            browser_to_delete.deleteLater()
+
         if deleting_current:
             if self.active_llms:
                 fallback = self.active_llms[0]
                 self.current_provider = fallback["name"]
                 self.current_provider_id = fallback["id"]
-                self.browser.setUrl(QUrl(fallback["url"]))
+                if fallback["id"] in self.browsers:
+                    self.browser_stack.setCurrentWidget(self.browsers[fallback["id"]])
             else:
                 self.current_provider = "ChatGPT"
                 self.current_provider_id = None
@@ -834,8 +867,12 @@ class ChatPanel(QWidget):
             self.active_llms.append(new_llm)
             self.save_setting("active_llms", json.dumps(self.active_llms))
             self.render_active_llms()
+            
+            # Spin up the new browser in the background
+            self.add_browser_to_stack(new_llm["id"], new_llm["url"]) 
+            
             QTimer.singleShot(0, lambda: self.play_plus_to_tab_animation(old_plus_rect, new_llm["id"]))
-
+        
         drop_group.finished.connect(after_drop)
         self.tab_animations.append(drop_group)
         drop_group.start()
@@ -928,9 +965,11 @@ class ChatPanel(QWidget):
             self.active_llms.append(new_llm)
             self.save_setting("active_llms", json.dumps(self.active_llms))
             self.render_active_llms()
+            
+            # Spin up the new browser in the background
+            self.add_browser_to_stack(new_llm["id"], new_llm["url"]) 
+            
             self.play_plus_to_tab_animation(old_plus_rect, new_llm["id"])
-
-        QTimer.singleShot(75, start_tab_materialize)
 
         def cleanup_splash():
             for widget in splash_widgets:
@@ -1002,19 +1041,28 @@ class ChatPanel(QWidget):
         top_bar.addWidget(self.settings_button, alignment=Qt.AlignVCenter)
         top_bar.addWidget(self.close_button, alignment=Qt.AlignVCenter)
 
+        self.title_bar.setLayout(top_bar)
+
+        # --- CLEANED UP CONTAINER LAYOUT ---
         container_layout = QVBoxLayout()
         container_layout.setContentsMargins(12, 12, 12, 12)
-
-        self.title_bar.setLayout(top_bar)
         container_layout.addWidget(self.title_bar)
 
         self.content_stack = QStackedWidget()
-        self.content_stack.addWidget(self.browser)
+        self.content_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        self.content_stack.addWidget(self.browser_stack)
         self.content_stack.addWidget(self.setting_panel)
-        self.content_stack.setCurrentWidget(self.browser)
+        self.content_stack.setCurrentWidget(self.browser_stack)
 
         container_layout.addWidget(self.content_stack, 1)
+        
+        # THIS WAS THE CRITICAL MISSING LINE
         self.container.setLayout(container_layout)
+        # ---------------------------------
+
+        # Compose the initial background from the new base-color +
+        # opacity keys, falling back to migrating the old single-string
 
         # Compose the initial background from the new base-color +
         # opacity keys, falling back to migrating the old single-string
@@ -1034,6 +1082,7 @@ class ChatPanel(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(self.container)
         self.setLayout(main_layout)
+        self.show_browser()
 
     def _migrate_legacy_color(self, legacy_value):
         # Mirrors SettingPanel._migrate_legacy_color — kept independent
@@ -1056,11 +1105,17 @@ class ChatPanel(QWidget):
         return f"rgba({inner}, {alpha})"
 
     def show_browser(self):
-        self.content_stack.setCurrentWidget(self.browser)
+        self.content_stack.setCurrentWidget(self.browser_stack)
 
     def open_llm_url(self, name, url, llm_id=None):
         self.show_browser()
-        self.browser.setUrl(QUrl(url))
+        if llm_id and llm_id in self.browsers:
+            self.browser_stack.setCurrentWidget(self.browsers[llm_id])
+            
+            self.current_provider = name
+            self.current_provider_id = llm_id
+            self.save_setting("current_provider", self.current_provider)
+            self.save_setting("current_provider_id", self.current_provider_id)
 
     def close_panel(self):
         self.reset_to_browser()
@@ -1080,7 +1135,10 @@ class ChatPanel(QWidget):
     def clear_browsing_data(self):
         self.profile.cookieStore().deleteAllCookies()
         self.profile.clearHttpCache()
-        self.browser.reload()
+        
+        # Reload all background pages
+        for browser in self.browsers.values():
+            browser.reload()
 
         self.show_browser()
         self.setting_panel.appearance_btn.setChecked(True)
@@ -1092,7 +1150,7 @@ class ChatPanel(QWidget):
 
     def open_settings(self):
         if self.content_stack.currentWidget() is self.setting_panel:
-            self.content_stack.setCurrentWidget(self.browser)
+            self.content_stack.setCurrentWidget(self.browser_stack)
         else:
             self.content_stack.setCurrentWidget(self.setting_panel)
 
@@ -1142,10 +1200,10 @@ class ChatPanel(QWidget):
                 self.pending_geometry = None
 
                 self.browser_was_active_before_resize = (
-                        self.content_stack.currentWidget() is self.browser
+                        self.content_stack.currentWidget() is self.browser_stack
                 )
                 if self.browser_was_active_before_resize:
-                    self.browser.hide()
+                    self.browser_stack.hide()
 
                 self.resize_timer.start()
 
@@ -1217,10 +1275,10 @@ class ChatPanel(QWidget):
             self.apply_pending_geometry()
 
             if getattr(self, "browser_was_active_before_resize", False):
-                self.browser.show()
+                self.browser_stack.show()
 
         self.setCursor(QCursor(Qt.ArrowCursor))
         event.accept()
 
     def reset_to_browser(self):
-        self.content_stack.setCurrentWidget(self.browser)
+        self.content_stack.setCurrentWidget(self.browser_stack)
