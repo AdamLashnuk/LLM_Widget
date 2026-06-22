@@ -446,8 +446,13 @@ class ChatPanel(QWidget):
         storage_path = os.path.join(project_root, "session_data")
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
-        self.profile.setHttpUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        profile = QWebEngineProfile.defaultProfile()
+
+        # Define a standard, modern Google Chrome User-Agent string
+        chrome_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+        # Apply the fake User-Agent to bypass Google's block
+        profile.setHttpUserAgent(chrome_user_agent)
 
         for llm in self.active_llms:
             self.add_browser_to_stack(llm["id"], llm["url"])
