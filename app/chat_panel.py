@@ -265,7 +265,7 @@ class ChatPanel(QWidget):
 
     def setup_window(self):
 
-        self.settings = QSettings("MyLLMWidget", "ChatPanel")
+        self.settings = QSettings("MyLLMWidget", "Portal")
         self.current_provider = self.settings.value("current_provider", "ChatGPT")
         self.current_provider_id = self.settings.value("current_provider_id", None)
 

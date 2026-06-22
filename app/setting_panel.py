@@ -112,7 +112,7 @@ class SettingPanel(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.settings = QSettings("MyLLMWidget", "Keybinds")
+        self.settings = QSettings("MyLLMWidget", "Portal")
         saved_binds = self.settings.value("shortcuts")
         if saved_binds:
             self.current_keybinds = json.loads(saved_binds)

@@ -30,7 +30,7 @@ class FloatingWidget(QWidget):
         self.setAttribute(Qt.WA_Hover)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        self.settings = QSettings("MyLLMWidget", "ChatPanel")
+        self.settings = QSettings("MyLLMWidget", "Portal")
         self.widget_position_mode = self.settings.value("widget_position_mode", "free")
         self.apply_widget_position_mode()
 
@@ -113,7 +113,7 @@ class FloatingWidget(QWidget):
 
         self.tray_menu.addSeparator()
 
-        quit_action = QAction("Quit LLM Widget", self)
+        quit_action = QAction("Quit Portal", self)
         quit_action.triggered.connect(self.quit_app)
         self.tray_menu.addAction(quit_action)
 
