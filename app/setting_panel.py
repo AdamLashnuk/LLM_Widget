@@ -554,7 +554,7 @@ class SettingPanel(QWidget):
             row_widget.setObjectName("transparentWidget")
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)
-
+#
             lbl = QLabel(data["label"])
             lbl.setProperty("class", "cardTitle")
             row_layout.addWidget(lbl)

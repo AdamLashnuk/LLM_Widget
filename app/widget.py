@@ -214,7 +214,7 @@ class FloatingWidget(QWidget):
             self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self.was_dragging = False
             event.accept()
-
+#
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:
             if self.widget_position_mode == "free":

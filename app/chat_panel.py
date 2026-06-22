@@ -1616,7 +1616,7 @@ class ChatPanel(QWidget):
 
             if self.resize_direction in (Qt.RightSection, Qt.TopRightSection, Qt.BottomRightSection):
                 new_right = max(geom.left() + min_w - 1, geom.right() + delta.x())
-
+#
             if self.resize_direction in (Qt.TopSection, Qt.TopLeftSection, Qt.TopRightSection):
                 new_top = min(geom.bottom() - min_h + 1, geom.top() + delta.y())
 

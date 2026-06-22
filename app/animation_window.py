@@ -6,7 +6,7 @@ from PySide6.QtGui import QPainter, QColor
 class AnimationWindow(QWidget):
     open_finished = Signal()
     close_finished = Signal()
-
+#
     def __init__(self):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
