@@ -117,6 +117,13 @@ class ChatPanel(QWidget):
         self.drag_position = None
         self.tab_animations = []
 
+        # --- Multitask state ---
+        self.multitask_active = False
+        self.multitask_view = None
+        self.multitask_browsers = {}
+        self.multitask_tab_button = None
+        self.multitask_prompt_overlay = None
+
         self.resize_margin = 8
         self.resize_direction = None
 
@@ -223,7 +230,7 @@ class ChatPanel(QWidget):
         elif action_id == "quick_refresh":
             if self.current_browser():
                 self.current_browser().reload()
-                
+
         elif action_id == "refresh":
             if self.current_browser():
                 from PySide6.QtWebEngineCore import QWebEnginePage
@@ -383,6 +390,21 @@ class ChatPanel(QWidget):
             QPushButton#settingsButton:hover {
                 background-color: #333333;
             }
+
+            QPushButton#multitaskButton {
+                background-color: rgba(99, 102, 241, 0.15);
+                border: 1px solid rgba(129, 140, 248, 0.45);
+                color: #ececec;
+                border-radius: 10px;
+                padding: 6px 12px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            QPushButton#multitaskButton:hover {
+                background-color: rgba(99, 102, 241, 0.26);
+                border: 1px solid rgba(165, 180, 252, 0.65);
+            }
         """)
 
     def create_widgets(self):
@@ -429,6 +451,11 @@ class ChatPanel(QWidget):
         self.settings_button.setFixedSize(32, 32)
         self.settings_button.clicked.connect(self.open_settings)
 
+        self.multitask_button = QPushButton("Multitask")
+        self.multitask_button.setObjectName("multitaskButton")
+        self.multitask_button.setFixedHeight(32)
+        self.multitask_button.clicked.connect(self.open_multitask_prompt)
+
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         icon_path = os.path.join(project_root, "assets", "gearsettingsgrey.png")
 
@@ -440,14 +467,15 @@ class ChatPanel(QWidget):
 
         # --- NEW BROWSER STACK SETUP ---
         self.browser_stack = QStackedWidget()
-        self.browser_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) # Force expansion
+        self.browser_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Force expansion
         self.browsers = {}
 
         self.profile = QWebEngineProfile("llm_profile", self.browser_stack)
         storage_path = os.path.join(project_root, "session_data")
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
-        self.profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        self.profile.setHttpUserAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
         # Create a background browser for every saved LLM
         for llm in self.active_llms:
@@ -461,7 +489,7 @@ class ChatPanel(QWidget):
 
     def add_browser_to_stack(self, llm_id, url):
         browser = QWebEngineView()
-        
+
         browser_policy = browser.sizePolicy()
         browser_policy.setHorizontalPolicy(QSizePolicy.Expanding)
         browser_policy.setVerticalPolicy(QSizePolicy.Expanding)
@@ -491,7 +519,7 @@ class ChatPanel(QWidget):
         for i in reversed(range(self.llm_layout.count())):
             item = self.llm_layout.itemAt(i)
             widget = item.widget()
-            
+
             # If it's empty space (stretch) or an old tab, destroy it
             if not widget or widget != self.add_button:
                 self.llm_layout.takeAt(i)
@@ -517,14 +545,38 @@ class ChatPanel(QWidget):
             )
 
             self.llm_buttons[llm["id"]] = btn
-            
+
             # Insert at current index `i` (pushes the + button naturally to the right)
             self.llm_layout.insertWidget(i, btn, alignment=Qt.AlignVCenter)
 
-        # 4. Add stretch space after everything is placed
+        # 4. Insert the temporary Multitask tab if a multitask session exists.
+        if self.multitask_active:
+            self.multitask_tab_button = QPushButton("Multitask")
+            self.multitask_tab_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(99, 102, 241, 0.20);
+                    color: #ffffff;
+                    border: 1px solid rgba(129, 140, 248, 0.65);
+                    border-radius: 10px;
+                    padding: 8px 14px;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background-color: rgba(99, 102, 241, 0.32);
+                }
+            """)
+            self.multitask_tab_button.clicked.connect(self.show_multitask_tab)
+            self.multitask_tab_button.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.multitask_tab_button.customContextMenuRequested.connect(
+                lambda pos, button=self.multitask_tab_button: self.show_multitask_context_menu(button)
+            )
+            self.llm_layout.insertWidget(len(self.active_llms), self.multitask_tab_button, alignment=Qt.AlignVCenter)
+
+        # 5. Add stretch space after everything is placed
         self.llm_layout.addStretch()
-        
-        # 5. Fail-safe reset
+
+        # 6. Fail-safe reset
         self.add_button.setEnabled(True)
         self.add_button.show()
 
@@ -653,7 +705,8 @@ class ChatPanel(QWidget):
 
         # 2. Ripple Animation Widget
         self.pool_ripple = QLabel(self)
-        self.pool_ripple.setStyleSheet("QLabel { background-color: transparent; border: 2px solid rgba(165, 120, 255, 180); border-radius: 5px; }")
+        self.pool_ripple.setStyleSheet(
+            "QLabel { background-color: transparent; border: 2px solid rgba(165, 120, 255, 180); border-radius: 5px; }")
         self.pool_ripple.hide()
         self.pool_ripple_opacity = QGraphicsOpacityEffect(self.pool_ripple)
         self.pool_ripple.setGraphicsEffect(self.pool_ripple_opacity)
@@ -665,7 +718,8 @@ class ChatPanel(QWidget):
             radius = size // 2
             dot = QLabel(self)
             dot.setFixedSize(size, size)
-            dot.setStyleSheet(f"QLabel {{ background-color: rgba(170, 125, 255, 220); border: 1px solid rgba(235, 225, 255, 180); border-radius: {radius}px; }}")
+            dot.setStyleSheet(
+                f"QLabel {{ background-color: rgba(170, 125, 255, 220); border: 1px solid rgba(235, 225, 255, 180); border-radius: {radius}px; }}")
             dot.hide()
             opacity = QGraphicsOpacityEffect(dot)
             dot.setGraphicsEffect(opacity)
@@ -678,7 +732,8 @@ class ChatPanel(QWidget):
             radius = size // 2
             dot = QLabel(self)
             dot.setFixedSize(size, size)
-            dot.setStyleSheet(f"QLabel {{ background-color: rgba(170, 125, 255, 220); border: 1px solid rgba(235, 225, 255, 180); border-radius: {radius}px; }}")
+            dot.setStyleSheet(
+                f"QLabel {{ background-color: rgba(170, 125, 255, 220); border: 1px solid rgba(235, 225, 255, 180); border-radius: {radius}px; }}")
             dot.hide()
             opacity = QGraphicsOpacityEffect(dot)
             dot.setGraphicsEffect(opacity)
@@ -790,7 +845,7 @@ class ChatPanel(QWidget):
             dot_opacity.setOpacity(1.0)
             dot.show()
             dot.raise_()
-            
+
             pop_dots.append(dot)
 
             end_rect = QRect(
@@ -836,9 +891,9 @@ class ChatPanel(QWidget):
             particle_group.start()
 
         def start_slide_after_pause():
-            ghost.hide() # <--- HIDE INSTEAD OF DELETE
+            ghost.hide()  # <--- HIDE INSTEAD OF DELETE
             for dot in pop_dots:
-                dot.hide() # <--- HIDE INSTEAD OF DELETE
+                dot.hide()  # <--- HIDE INSTEAD OF DELETE
             QTimer.singleShot(180, collapse_group.start)
 
         def finish_delete():
@@ -914,14 +969,14 @@ class ChatPanel(QWidget):
         drop_group.addAnimation(drop_fade)
 
         def after_drop():
-            drop.hide() # <--- HIDE INSTEAD OF DELETE
+            drop.hide()  # <--- HIDE INSTEAD OF DELETE
             self.active_llms.append(new_llm)
             self.save_setting("active_llms", json.dumps(self.active_llms))
             self.render_active_llms()
-            
-            self.add_browser_to_stack(new_llm["id"], new_llm["url"]) 
+
+            self.add_browser_to_stack(new_llm["id"], new_llm["url"])
             QTimer.singleShot(0, lambda: self.play_plus_to_tab_animation(old_plus_rect, new_llm["id"]))
-        
+
         drop_group.finished.connect(after_drop)
         self.tab_animations.append(drop_group)
         drop_group.start()
@@ -996,13 +1051,13 @@ class ChatPanel(QWidget):
             self.active_llms.append(new_llm)
             self.save_setting("active_llms", json.dumps(self.active_llms))
             self.render_active_llms()
-            
-            self.add_browser_to_stack(new_llm["id"], new_llm["url"]) 
+
+            self.add_browser_to_stack(new_llm["id"], new_llm["url"])
             self.play_plus_to_tab_animation(old_plus_rect, new_llm["id"])
 
         def cleanup_splash():
             for widget in splash_widgets:
-                widget.hide() # <--- HIDE INSTEAD OF DELETE
+                widget.hide()  # <--- HIDE INSTEAD OF DELETE
 
         splash_group.finished.connect(cleanup_splash)
         self.tab_animations.append(splash_group)
@@ -1050,8 +1105,8 @@ class ChatPanel(QWidget):
         group.addAnimation(plus_anim)
 
         def finish():
-            tab_clone.hide() # <--- HIDE INSTEAD OF DELETE
-            plus_clone.hide() # <--- HIDE INSTEAD OF DELETE
+            tab_clone.hide()  # <--- HIDE INSTEAD OF DELETE
+            plus_clone.hide()  # <--- HIDE INSTEAD OF DELETE
             new_tab.show()
             self.add_button.show()
             self.add_button.setEnabled(True)
@@ -1059,6 +1114,352 @@ class ChatPanel(QWidget):
         group.finished.connect(finish)
         self.tab_animations.append(group)
         group.start()
+
+    def open_multitask_prompt(self):
+        if self.multitask_prompt_overlay:
+            self.multitask_prompt_overlay.deleteLater()
+            self.multitask_prompt_overlay = None
+
+        button_rect = self.widget_rect_in_panel(self.multitask_button)
+        start_rect = QRect(
+            button_rect.center().x() - 20,
+            button_rect.center().y() - 16,
+            40,
+            32
+        )
+
+        target_w = min(650, max(500, self.width() - 100))
+        target_h = 155
+
+        target_rect = QRect(
+            (self.width() - target_w) // 2,
+            72,
+            target_w,
+            target_h
+        )
+
+        overlay = QFrame(self)
+        overlay.setObjectName("multitaskPromptOverlay")
+        overlay.setGeometry(start_rect)
+        overlay.setStyleSheet("""
+            QFrame#multitaskPromptOverlay {
+                background-color: rgba(24, 24, 28, 245);
+                border: 2px solid rgba(129, 140, 248, 180);
+                border-radius: 18px;
+            }
+            QLabel {
+                background: transparent;
+                color: #ffffff;
+                font-size: 15px;
+                font-weight: 600;
+            }
+            QLineEdit {
+                background-color: #151515;
+                border: 1px solid #333333;
+                border-radius: 10px;
+                color: white;
+                padding: 9px 12px;
+                font-size: 14px;
+                font-family: "Segoe UI";
+            }
+        """)
+
+        overlay_layout = QVBoxLayout(overlay)
+        overlay_layout.setContentsMargins(18, 14, 18, 14)
+        overlay_layout.setSpacing(10)
+
+        title = QLabel("Ask every AI")
+
+        warning = QLabel(
+            "PS: Make sure you're logged in to each AI. "
+            "Providers that aren't signed in may not receive your prompt."
+        )
+
+        warning.setWordWrap(True)
+
+        warning.setStyleSheet("""
+            QLabel {
+                color: #b4b4b4;
+                font-size: 11px;
+                background: transparent;
+            }
+        """)
+        input_box = QLineEdit()
+        input_box.setPlaceholderText("Type your question and press Enter...")
+
+        overlay_layout.addWidget(title)
+        overlay_layout.addWidget(warning)
+        overlay_layout.addWidget(input_box)
+
+        overlay.show()
+        overlay.raise_()
+        self.multitask_prompt_overlay = overlay
+
+        grow = QPropertyAnimation(overlay, b"geometry")
+        grow.setDuration(260)
+        grow.setStartValue(start_rect)
+        grow.setEndValue(target_rect)
+        grow.setEasingCurve(QEasingCurve.OutCubic)
+
+        fade = QGraphicsOpacityEffect(overlay)
+        overlay.setGraphicsEffect(fade)
+        fade_anim = QPropertyAnimation(fade, b"opacity")
+        fade_anim.setDuration(220)
+        fade_anim.setStartValue(0.0)
+        fade_anim.setEndValue(1.0)
+        fade_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        group = QParallelAnimationGroup(self)
+        group.addAnimation(grow)
+        group.addAnimation(fade_anim)
+
+        def focus_input():
+            input_box.setFocus()
+
+        group.finished.connect(focus_input)
+        self.tab_animations.append(group)
+        group.start()
+
+        input_box.returnPressed.connect(lambda: self.submit_multitask_prompt(input_box.text().strip(), overlay))
+
+    def submit_multitask_prompt(self, prompt, overlay):
+        if not prompt:
+            return
+
+        start_rect = overlay.geometry()
+        end_rect = QRect(start_rect.center().x(), start_rect.center().y(), 0, 0)
+
+        shrink = QPropertyAnimation(overlay, b"geometry")
+        shrink.setDuration(180)
+        shrink.setStartValue(start_rect)
+        shrink.setEndValue(end_rect)
+        shrink.setEasingCurve(QEasingCurve.InCubic)
+
+        effect = overlay.graphicsEffect()
+        fade = QPropertyAnimation(effect, b"opacity")
+        fade.setDuration(160)
+        fade.setStartValue(1.0)
+        fade.setEndValue(0.0)
+
+        group = QParallelAnimationGroup(self)
+        group.addAnimation(shrink)
+        group.addAnimation(fade)
+
+        def finish():
+            overlay.deleteLater()
+            self.multitask_prompt_overlay = None
+            self.open_multitask_tab(prompt)
+
+        group.finished.connect(finish)
+        self.tab_animations.append(group)
+        group.start()
+
+    def open_multitask_tab(self, prompt):
+        if self.multitask_active and self.multitask_view:
+            self.show_multitask_tab()
+            self.send_prompt_to_existing_multitask(prompt)
+            return
+
+        self.multitask_active = True
+        self.build_multitask_view(prompt)
+        self.render_active_llms()
+        self.show_multitask_tab()
+
+    def send_prompt_to_existing_multitask(self, prompt):
+        if not self.multitask_browsers:
+            return
+
+        for llm in self.active_llms:
+            browser = self.multitask_browsers.get(llm["id"])
+            if browser:
+                self.try_send_prompt_to_browser(browser, prompt)
+
+    def show_multitask_tab(self):
+        if self.multitask_view:
+            self.content_stack.setCurrentWidget(self.multitask_view)
+
+    def show_multitask_context_menu(self, button):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background-color: #1f1f1f; border: 1px solid #333333; border-radius: 8px; padding: 4px; color: #ececec; }
+            QMenu::item { padding: 6px 16px; border-radius: 4px; }
+            QMenu::item:selected { background-color: #333333; }
+        """)
+        delete_action = menu.addAction("Delete Multitask")
+        chosen = menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        if chosen == delete_action:
+            self.delete_multitask_tab()
+
+    def delete_multitask_tab(self):
+        self.multitask_active = False
+
+        if self.multitask_view:
+            if self.content_stack.currentWidget() is self.multitask_view:
+                self.content_stack.setCurrentWidget(self.browser_stack)
+            self.content_stack.removeWidget(self.multitask_view)
+            self.multitask_view.deleteLater()
+            self.multitask_view = None
+
+        for browser in self.multitask_browsers.values():
+            browser.deleteLater()
+        self.multitask_browsers.clear()
+        self.multitask_tab_button = None
+        self.render_active_llms()
+
+    def build_multitask_view(self, prompt):
+        if self.multitask_view:
+            self.content_stack.removeWidget(self.multitask_view)
+            self.multitask_view.deleteLater()
+            self.multitask_view = None
+            self.multitask_browsers.clear()
+
+        wrapper = QWidget()
+        wrapper.setStyleSheet("""
+            QWidget { background-color: transparent; }
+            QLabel#multitaskTitle {
+                color: #ffffff;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            QLabel#multitaskQuestion {
+                color: #b4b4b4;
+                font-size: 13px;
+            }
+            QLabel#multitaskProvider {
+                color: #ececec;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 3px 0px;
+            }
+            QFrame#multitaskCard {
+                background-color: rgba(20, 20, 20, 150);
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 14px;
+            }
+        """)
+
+        outer = QVBoxLayout(wrapper)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
+
+        title = QLabel("Multitask")
+        title.setObjectName("multitaskTitle")
+        question = QLabel(prompt)
+        question.setObjectName("multitaskQuestion")
+        question.setWordWrap(True)
+
+        outer.addWidget(title)
+        outer.addWidget(question)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        row_holder = QWidget()
+        row = QHBoxLayout(row_holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+
+        for llm in self.active_llms:
+            card = QFrame()
+            card.setObjectName("multitaskCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(10, 10, 10, 10)
+            card_layout.setSpacing(8)
+
+            label = QLabel(llm["name"])
+            label.setObjectName("multitaskProvider")
+            card_layout.addWidget(label)
+
+            status = QLabel("Checking login...")
+            status.setStyleSheet("QLabel { color: #a5b4fc; font-size: 12px; background: transparent; }")
+            card_layout.addWidget(status)
+
+            browser = QWebEngineView()
+            browser.setMinimumWidth(360)
+            browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            page = QWebEnginePage(self.profile, browser)
+            browser.setPage(page)
+            browser.setUrl(QUrl(llm["url"]))
+            browser.loadFinished.connect(
+                lambda ok, b=browser, q=prompt, st=status:
+                QTimer.singleShot(
+                    2500,
+                    lambda: self.try_send_prompt_to_browser(
+                        b,
+                        q,
+                        st
+                    )
+                )
+            )
+
+            self.multitask_browsers[llm["id"]] = browser
+            card_layout.addWidget(browser, 1)
+            row.addWidget(card)
+
+        scroll.setWidget(row_holder)
+        outer.addWidget(scroll, 1)
+
+        self.multitask_view = wrapper
+        self.content_stack.addWidget(wrapper)
+
+
+    def try_send_prompt_to_browser(self, browser, prompt, status_label=None):
+        escaped_prompt = json.dumps(prompt)
+        js = f"""
+        (function() {{
+            const promptText = {escaped_prompt};
+            function visible(el) {{
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+            }}
+            const candidates = Array.from(document.querySelectorAll(
+                'textarea, div[contenteditable="true"], [role="textbox"], input[type="text"]'
+            )).filter(visible);
+            const box = candidates[candidates.length - 1];
+            if (!box) return false;
+
+            box.focus();
+            if (box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') {{
+                box.value = promptText;
+                box.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                box.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }} else {{
+                box.textContent = promptText;
+                box.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: promptText }}));
+            }}
+
+            setTimeout(() => {{
+                const enterDown = new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true }});
+                const enterUp = new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true }});
+                box.dispatchEvent(enterDown);
+                box.dispatchEvent(enterUp);
+
+                const sendButton = Array.from(document.querySelectorAll('button, [role="button"]')).find(btn => {{
+                    const label = (btn.getAttribute('aria-label') || btn.innerText || '').toLowerCase();
+                    return visible(btn) && (label.includes('send') || label.includes('submit'));
+                }});
+                if (sendButton) sendButton.click();
+            }}, 250);
+            return true;
+        }})();
+        """
+
+        def retry(result):
+            if result:
+                if status_label:
+                    status_label.setText("Prompt sent")
+                    status_label.setStyleSheet("QLabel { color: #86efac; font-size: 12px; background: transparent; }")
+                return
+
+            if status_label:
+                status_label.setText("Skipped — prompt box not found")
+                status_label.setStyleSheet("QLabel { color: #fca5a5; font-size: 12px; background: transparent; }")
+
+        browser.page().runJavaScript(js, retry)
 
     def create_layout(self):
         top_bar = QHBoxLayout()
@@ -1068,6 +1469,7 @@ class ChatPanel(QWidget):
         top_bar.setContentsMargins(18, 4, 18, 4)
         top_bar.addWidget(self.scroll_area, alignment=Qt.AlignVCenter)
         top_bar.addStretch()
+        top_bar.addWidget(self.multitask_button, alignment=Qt.AlignVCenter)
         top_bar.addWidget(self.settings_button, alignment=Qt.AlignVCenter)
         top_bar.addWidget(self.close_button, alignment=Qt.AlignVCenter)
 
@@ -1080,13 +1482,13 @@ class ChatPanel(QWidget):
 
         self.content_stack = QStackedWidget()
         self.content_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        
+
         self.content_stack.addWidget(self.browser_stack)
         self.content_stack.addWidget(self.setting_panel)
         self.content_stack.setCurrentWidget(self.browser_stack)
 
         container_layout.addWidget(self.content_stack, 1)
-        
+
         # THIS WAS THE CRITICAL MISSING LINE
         self.container.setLayout(container_layout)
         # ---------------------------------
@@ -1141,7 +1543,7 @@ class ChatPanel(QWidget):
         self.show_browser()
         if llm_id and llm_id in self.browsers:
             self.browser_stack.setCurrentWidget(self.browsers[llm_id])
-            
+
             self.current_provider = name
             self.current_provider_id = llm_id
             self.save_setting("current_provider", self.current_provider)
@@ -1165,7 +1567,7 @@ class ChatPanel(QWidget):
     def clear_browsing_data(self):
         self.profile.cookieStore().deleteAllCookies()
         self.profile.clearHttpCache()
-        
+
         # Reload all background pages
         for browser in self.browsers.values():
             browser.reload()
@@ -1218,6 +1620,29 @@ class ChatPanel(QWidget):
         else:
             self.setCursor(QCursor(Qt.ArrowCursor))
 
+    def hide_resize_heavy_content(self):
+        """
+        QWebEngineViews repaint badly while a frameless translucent window is being resized,
+        especially from the left/top edges because the window position and size change together.
+        Hide whichever heavy view is currently active, then show it again on release.
+        """
+        self.resize_hidden_widget = None
+        current = self.content_stack.currentWidget()
+
+        if current is self.browser_stack:
+            self.resize_hidden_widget = self.browser_stack
+        elif getattr(self, "multitask_view", None) is not None and current is self.multitask_view:
+            self.resize_hidden_widget = self.multitask_view
+
+        if self.resize_hidden_widget:
+            self.resize_hidden_widget.hide()
+
+    def show_resize_heavy_content(self):
+        hidden = getattr(self, "resize_hidden_widget", None)
+        if hidden:
+            hidden.show()
+        self.resize_hidden_widget = None
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             position = event.position().toPoint()
@@ -1225,16 +1650,11 @@ class ChatPanel(QWidget):
 
             if direction:
                 self.resize_direction = direction
-                self.initial_geometry = self.geometry()
+                self.initial_geometry = QRect(self.geometry())
                 self.initial_global_pos = event.globalPosition().toPoint()
                 self.pending_geometry = None
 
-                self.browser_was_active_before_resize = (
-                        self.content_stack.currentWidget() is self.browser_stack
-                )
-                if self.browser_was_active_before_resize:
-                    self.browser_stack.hide()
-
+                self.hide_resize_heavy_content()
                 self.resize_timer.start()
 
                 event.accept()
@@ -1251,38 +1671,30 @@ class ChatPanel(QWidget):
 
         if self.resize_direction:
             delta = event.globalPosition().toPoint() - self.initial_global_pos
-            geom = self.initial_geometry
-
-            left, top, width, height = geom.left(), geom.top(), geom.width(), geom.height()
+            geom = QRect(self.initial_geometry)
             min_w, min_h = self.minimumWidth(), self.minimumHeight()
 
-            if self.resize_direction in (Qt.RightSection, Qt.BottomRightSection, Qt.TopRightSection):
-                width = max(min_w, geom.width() + delta.x())
-
-            if self.resize_direction in (Qt.BottomSection, Qt.BottomRightSection, Qt.BottomLeftSection):
-                height = max(min_h, geom.height() + delta.y())
-
-            if self.resize_direction in (Qt.TopSection, Qt.TopLeftSection):
-                max_delta_y = geom.height() - min_h
-                actual_delta_y = min(delta.y(), max_delta_y)
-                top = geom.top() + actual_delta_y
-                height = geom.height() - actual_delta_y
+            new_left = geom.left()
+            new_top = geom.top()
+            new_right = geom.right()
+            new_bottom = geom.bottom()
 
             if self.resize_direction in (Qt.LeftSection, Qt.TopLeftSection, Qt.BottomLeftSection):
-                max_delta_x = geom.width() - min_w
-                actual_delta_x = min(delta.x(), max_delta_x)
-                left = geom.left() + actual_delta_x
-                width = geom.width() - actual_delta_x
+                new_left = min(geom.right() - min_w + 1, geom.left() + delta.x())
 
-            if self.resize_direction == Qt.TopRightSection:
-                max_delta_y = geom.height() - min_h
-                actual_delta_y = min(delta.y(), max_delta_y)
-                top = geom.top() + actual_delta_y
-                height = geom.height() - actual_delta_y
+            if self.resize_direction in (Qt.RightSection, Qt.TopRightSection, Qt.BottomRightSection):
+                new_right = max(geom.left() + min_w - 1, geom.right() + delta.x())
 
-            target_rect = (left, top, width, height)
-            if self.geometry().getRect() != target_rect:
-                self.pending_geometry = target_rect
+            if self.resize_direction in (Qt.TopSection, Qt.TopLeftSection, Qt.TopRightSection):
+                new_top = min(geom.bottom() - min_h + 1, geom.top() + delta.y())
+
+            if self.resize_direction in (Qt.BottomSection, Qt.BottomLeftSection, Qt.BottomRightSection):
+                new_bottom = max(geom.top() + min_h - 1, geom.bottom() + delta.y())
+
+            target = QRect(QPoint(new_left, new_top), QPoint(new_right, new_bottom))
+
+            if self.geometry() != target:
+                self.pending_geometry = target.getRect()
 
             event.accept()
 
@@ -1303,9 +1715,7 @@ class ChatPanel(QWidget):
             self.resize_direction = None
             self.resize_timer.stop()
             self.apply_pending_geometry()
-
-            if getattr(self, "browser_was_active_before_resize", False):
-                self.browser_stack.show()
+            self.show_resize_heavy_content()
 
         self.setCursor(QCursor(Qt.ArrowCursor))
         event.accept()
