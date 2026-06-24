@@ -1,9 +1,6 @@
 # Portal
 
-> A floating desktop hub for ChatGPT, Claude, Gemini, and other AI models.
-
-Pre-Release Notice: Portal is currently in active development and should be considered a pre-release version. Features may change, bugs may be present, and certain functionality may be incomplete as development continues. Feedback, bug reports, and suggestions are welcome.
-
+> Pre-Release Notice: Portal is currently in active development and should be considered a pre-release version. Features may change, bugs may be present, and certain functionality may be incomplete as development continues. Feedback, bug reports, and suggestions are welcome.
 
 Portal is a lightweight desktop application that gives users instant access to multiple AI providers from a single floating widget. Instead of managing countless browser tabs, Portal keeps your favorite LLMs one click away while remaining accessible from anywhere on your desktop.
 
