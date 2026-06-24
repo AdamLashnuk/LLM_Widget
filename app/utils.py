@@ -25,7 +25,9 @@ def set_startup(enabled: bool = True):
         app_path = f'"{sys.executable}"'
     else:
         main_script = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'main.py'))
-        app_path = f'"{sys.executable}" "{main_script}"'
+        # Replace python.exe with pythonw.exe to hide the console
+        exec_path = sys.executable.replace("python.exe", "pythonw.exe")
+        app_path = f'"{exec_path}" "{main_script}"'
 
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH, 0, winreg.KEY_SET_VALUE)
