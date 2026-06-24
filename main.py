@@ -6,7 +6,9 @@ from app.utils import initialize_startup_default
 import os
 
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-    "--disable-features=AutomationControlled"
+    "--disable-features=AutomationControlled "
+    "--disable-blink-features=AutomationControlled "
+    "--disable-infobars"
 )
 
 # This starts the entire app

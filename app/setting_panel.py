@@ -682,8 +682,8 @@ class SettingPanel(QWidget):
         kb_layout.addWidget(kb_card)
 
         self.content_stack.addWidget(self.appearance_page)
-        self.content_stack.addWidget(self.privacy_page)
         self.content_stack.addWidget(self.keybinds_page)
+        self.content_stack.addWidget(self.privacy_page)
 
         self.nav_group.idClicked.connect(self.content_stack.setCurrentIndex)
 

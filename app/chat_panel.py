@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings, QPropertyAnimatio
     QParallelAnimationGroup, QSequentialAnimationGroup, QObject
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QCursor, QShortcut, QKeySequence
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
+from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
 
 from app.setting_panel import SettingPanel
 from app.utils import get_asset_path
@@ -456,13 +456,10 @@ class ChatPanel(QWidget):
         storage_path = os.path.join(project_root, "session_data")
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
-        profile = QWebEngineProfile.defaultProfile()
-
-        # Define a standard, modern Google Chrome User-Agent string
-        chrome_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-        # Apply the fake User-Agent to bypass Google's block
-        profile.setHttpUserAgent(chrome_user_agent)
+        
+        # Hardening: Set a proper Accept-Language header. A missing or default
+        # Accept-Language header is a common bot detection signal.
+        self.profile.setHttpAcceptLanguage("en-US,en;q=0.9")
 
         for llm in self.active_llms:
             self.add_browser_to_stack(llm["id"], llm["url"])
@@ -480,6 +477,14 @@ class ChatPanel(QWidget):
         browser_policy.setVerticalPolicy(QSizePolicy.Expanding)
         browser_policy.setRetainSizeWhenHidden(True)
         browser.setSizePolicy(browser_policy)
+
+        # Hardening: Explicitly enable typical browser capabilities. If these
+        # remain off/default, the engine looks suspiciously limited.
+        settings = browser.settings()
+        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, True)
 
         page = QWebEnginePage(self.profile, browser)
 
@@ -1345,6 +1350,14 @@ class ChatPanel(QWidget):
             browser = QWebEngineView()
             browser.setMinimumWidth(360)
             browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            
+            # Hardening: explicitly enable capabilities for multitask tabs as well
+            settings = browser.settings()
+            settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, True)
+            
             page = QWebEnginePage(self.profile, browser)
             browser.setPage(page)
             browser.setUrl(QUrl(llm["url"]))
