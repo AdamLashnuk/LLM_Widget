@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, Q
                                QFrame, QRubberBand, QGraphicsOpacityEffect, QSizePolicy,
                                QScrollArea, QDialog, QLineEdit, QListWidget, QListWidgetItem,
                                QStackedWidget, QMenu, QInputDialog)
-from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings, QPropertyAnimation, QEasingCurve, Signal, QPoint, QRect, \
+from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings, QPropertyAnimation, QEasingCurve, Signal, QPoint, QRect, QStandardPaths, \
     QParallelAnimationGroup, QSequentialAnimationGroup, QObject
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QCursor, QShortcut, QKeySequence
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -453,7 +453,13 @@ class ChatPanel(QWidget):
         self.browsers = {}
 
         self.profile = QWebEngineProfile("llm_profile", self.browser_stack)
-        storage_path = os.path.join(project_root, "session_data")
+        
+        app_data_dir = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        
+        storage_path = os.path.join(app_data_dir, "Portal", "session_data")
+        
+        os.makedirs(storage_path, exist_ok=True)
+        
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
         
@@ -1538,8 +1544,14 @@ class ChatPanel(QWidget):
         self.profile.cookieStore().deleteAllCookies()
         self.profile.clearHttpCache()
 
+        js_clear = "window.localStorage.clear(); window.sessionStorage.clear();"
+
         for browser in self.browsers.values():
-            browser.reload()
+            browser.page().runJavaScript(js_clear, lambda res, b=browser: b.reload())
+
+        if hasattr(self, "multitask_browsers"):
+            for browser in self.multitask_browsers.values():
+                browser.page().runJavaScript(js_clear, lambda res, b=browser: b.reload())
 
         self.show_browser()
         self.setting_panel.appearance_btn.setChecked(True)
