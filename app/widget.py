@@ -36,25 +36,26 @@ class FloatingWidget(QWidget):
         margin = 20
         y_offset = margin + 30  # Pushes it away from the corners
         
-        if saved_position == "Top Right":
-            x = screen.width() - app_width  # Flush with right edge
-            y = y_offset                    # Pushed down from top corner
-        elif saved_position == "Top Left":
-            x = 0                           # Flush with left edge
-            y = y_offset                    # Pushed down from top corner
-        elif saved_position == "Bottom Right":
-            x = screen.width() - app_width  # Flush with right edge
-            y = screen.height() - app_height - y_offset # Pushed up from bottom corner
-        elif saved_position == "Bottom Left":
-            x = 0                           # Flush with left edge
-            y = screen.height() - app_height - y_offset # Pushed up from bottom corner
-        elif saved_position == "Center":
+        # FIX: Match the exact lowercase keys saved by setting_panel.py
+        if saved_position == "top_right":
+            x = screen.width() - app_width  
+            y = y_offset                    
+        elif saved_position == "top_left":
+            x = 0                           
+            y = y_offset                    
+        elif saved_position == "bottom_right":
+            x = screen.width() - app_width  
+            y = screen.height() - app_height - y_offset 
+        elif saved_position == "bottom_left":
+            x = 0                           
+            y = screen.height() - app_height - y_offset 
+        elif saved_position == "center":
             x = (screen.width() - app_width) // 2
             y = (screen.height() - app_height) // 2
         else:
-            # Fallback (Top Right)
-            x = screen.width() - app_width
-            y = y_offset
+            # Fallback (Center)
+            x = (screen.width() - app_width) // 2
+            y = (screen.height() - app_height) // 2
             
         self.move(x, y)
 
