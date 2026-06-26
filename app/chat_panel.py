@@ -454,7 +454,7 @@ class ChatPanel(QWidget):
 
         self.profile = QWebEngineProfile("llm_profile", self.browser_stack)
         
-        app_data_dir = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        app_data_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         
         storage_path = os.path.join(app_data_dir, "Portal", "session_data")
         
