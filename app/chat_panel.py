@@ -6,7 +6,8 @@ from PySide6.QtWidgets import (QWidget, QPushButton, QVBoxLayout, QHBoxLayout, Q
                                QFrame, QRubberBand, QGraphicsOpacityEffect, QSizePolicy,
                                QScrollArea, QDialog, QLineEdit, QListWidget, QListWidgetItem,
                                QStackedWidget, QMenu, QInputDialog)
-from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings, QPropertyAnimation, QEasingCurve, Signal, QPoint, QRect, QStandardPaths, \
+from PySide6.QtCore import Qt, QUrl, QSize, QTimer, QSettings, QPropertyAnimation, QEasingCurve, Signal, QPoint, QRect, \
+    QStandardPaths, \
     QParallelAnimationGroup, QSequentialAnimationGroup, QObject
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QCursor, QShortcut, QKeySequence
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -14,9 +15,12 @@ from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngin
 
 from app.setting_panel import SettingPanel
 from app.utils import get_asset_path
+from app.multitask.sender import MultitaskSender
+
 
 class GlobalHotkeyBridge(QObject):
     trigger = Signal(str)
+
 
 class HorizontalWheelScrollArea(QScrollArea):
     def wheelEvent(self, event):
@@ -24,6 +28,7 @@ class HorizontalWheelScrollArea(QScrollArea):
         bar = self.horizontalScrollBar()
         bar.setValue(bar.value() - delta)
         event.accept()
+
 
 class AddLLMDialog(QDialog):
     llm_selected = Signal(str, str)
@@ -105,6 +110,7 @@ class AddLLMDialog(QDialog):
         self.llm_selected.emit(name, url)
         self.accept()
 
+
 class ChatPanel(QWidget):
     def __init__(self, bubble=None):
         super().__init__()
@@ -116,6 +122,7 @@ class ChatPanel(QWidget):
         self.multitask_active = False
         self.multitask_view = None
         self.multitask_browsers = {}
+        self.multitask_senders = {}
         self.multitask_tab_button = None
         self.multitask_prompt_overlay = None
 
@@ -453,16 +460,16 @@ class ChatPanel(QWidget):
         self.browsers = {}
 
         self.profile = QWebEngineProfile("llm_profile", self.browser_stack)
-        
+
         app_data_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-        
+
         storage_path = os.path.join(app_data_dir, "Portal", "session_data")
-        
+
         os.makedirs(storage_path, exist_ok=True)
-        
+
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
-        
+
         # Hardening: Set a proper Accept-Language header. A missing or default
         # Accept-Language header is a common bot detection signal.
         self.profile.setHttpAcceptLanguage("en-US,en;q=0.9")
@@ -491,7 +498,7 @@ class ChatPanel(QWidget):
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, True)
-        
+
         # Add these two lines to allow clipboard access
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanPaste, True)
@@ -499,7 +506,7 @@ class ChatPanel(QWidget):
         page = QWebEnginePage(self.profile, browser)
 
         def grant_feature_permission(origin, feature):
-            # Remove the if statement so it automatically grants all requested features 
+            # Remove the if statement so it automatically grants all requested features
             # (Clipboard, Audio, Notifications, etc.)
             page.setFeaturePermission(origin, feature, QWebEnginePage.PermissionPolicy.PermissionGrantedByUser)
 
@@ -1285,6 +1292,7 @@ class ChatPanel(QWidget):
         for browser in self.multitask_browsers.values():
             browser.deleteLater()
         self.multitask_browsers.clear()
+        self.multitask_senders.clear()
         self.multitask_tab_button = None
         self.render_active_llms()
 
@@ -1298,26 +1306,10 @@ class ChatPanel(QWidget):
         wrapper = QWidget()
         wrapper.setStyleSheet("""
             QWidget { background-color: transparent; }
-            QLabel#multitaskTitle {
-                color: #ffffff;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QLabel#multitaskQuestion {
-                color: #b4b4b4;
-                font-size: 13px;
-            }
-            QLabel#multitaskProvider {
-                color: #ececec;
-                font-size: 13px;
-                font-weight: 600;
-                padding: 3px 0px;
-            }
-            QFrame#multitaskCard {
-                background-color: rgba(20, 20, 20, 150);
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 14px;
-            }
+            QLabel#multitaskTitle { color: #ffffff; font-size: 18px; font-weight: 700; }
+            QLabel#multitaskQuestion { color: #b4b4b4; font-size: 13px; }
+            QLabel#multitaskProvider { color: #ececec; font-size: 13px; font-weight: 600; padding: 3px 0px; }
+            QFrame#multitaskCard { background-color: rgba(20, 20, 20, 150); border: 1px solid rgba(255, 255, 255, 20); border-radius: 14px; }
         """)
 
         outer = QVBoxLayout(wrapper)
@@ -1329,7 +1321,6 @@ class ChatPanel(QWidget):
         question = QLabel(prompt)
         question.setObjectName("multitaskQuestion")
         question.setWordWrap(True)
-
         outer.addWidget(title)
         outer.addWidget(question)
 
@@ -1355,97 +1346,73 @@ class ChatPanel(QWidget):
             label.setObjectName("multitaskProvider")
             card_layout.addWidget(label)
 
-            status = QLabel("Checking login...")
+            status = QLabel("Loading...")
             status.setStyleSheet("QLabel { color: #a5b4fc; font-size: 12px; background: transparent; }")
             card_layout.addWidget(status)
 
             browser = QWebEngineView()
             browser.setMinimumWidth(360)
             browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            
+
             settings = browser.settings()
             settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, True)
-            
-            # Add these two lines here as well
             settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanPaste, True)
-            
+
             page = QWebEnginePage(self.profile, browser)
+
+            def grant_feature_permission(origin, feature, p=page):
+                p.setFeaturePermission(origin, feature, QWebEnginePage.PermissionPolicy.PermissionGrantedByUser)
+
+            page.featurePermissionRequested.connect(grant_feature_permission)
             browser.setPage(page)
-            browser.setUrl(QUrl(llm["url"]))
-            browser.loadFinished.connect(
-                lambda ok, b=browser, q=prompt, st=status:
-                QTimer.singleShot(
-                    2500,
-                    lambda: self.try_send_prompt_to_browser(
-                        b,
-                        q,
-                        st
-                    )
-                )
-            )
+
+            browser.setProperty("multitask_sent", False)
+            browser.setProperty("multitask_started", False)
+            browser.setProperty("multitask_provider", llm["name"])
+            browser.setProperty("multitask_id", llm["id"])
 
             self.multitask_browsers[llm["id"]] = browser
             card_layout.addWidget(browser, 1)
             row.addWidget(card)
 
+            def handle_loaded(ok, b=browser, q=prompt, st=status, provider=llm["name"]):
+                if not ok:
+                    st.setText("Page failed to load")
+                    st.setStyleSheet("QLabel { color: #fca5a5; font-size: 12px; background: transparent; }")
+                    return
+                if b.property("multitask_started"):
+                    return
+                b.setProperty("multitask_started", True)
+                sender = MultitaskSender(b, provider_name=provider, status_label=st, parent=self)
+                self.multitask_senders[b.property("multitask_id")] = sender
+                QTimer.singleShot(3500, lambda s=sender, qq=q: s.send(qq))
+
+            browser.loadFinished.connect(handle_loaded)
+            browser.setUrl(QUrl(llm["url"]))
+
+        row.addStretch()
         scroll.setWidget(row_holder)
         outer.addWidget(scroll, 1)
 
         self.multitask_view = wrapper
         self.content_stack.addWidget(wrapper)
 
-    def try_send_prompt_to_browser(self, browser, prompt, status_label=None):
-        escaped_prompt = json.dumps(prompt)
-        js = f"""
-        (function() {{
-            const promptText = {escaped_prompt};
-            function visible(el) {{
-                const r = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-            }}
-            const candidates = Array.from(document.querySelectorAll(
-                'textarea, div[contenteditable="true"], [role="textbox"], input[type="text"]'
-            )).filter(visible);
-            const box = candidates[candidates.length - 1];
-            if (!box) return false;
-
-            box.focus();
-            if (box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') {{
-                box.value = promptText;
-                box.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                box.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            }} else {{
-                box.textContent = promptText;
-                box.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: promptText }}));
-            }}
-
-            setTimeout(() => {{
-                const enterDown = new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true }});
-                const enterUp = new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true }});
-                box.dispatchEvent(enterDown);
-                box.dispatchEvent(enterUp);
-            }}, 250);
-            return true;
-        }})();
-        """
-
-        def retry(result):
-            if result:
-                if status_label:
-                    status_label.setText("Prompt sent")
-                    status_label.setStyleSheet("QLabel { color: #86efac; font-size: 12px; background: transparent; }")
-                return
-
-            if status_label:
-                status_label.setText("Skipped — prompt box not found")
-                status_label.setStyleSheet("QLabel { color: #fca5a5; font-size: 12px; background: transparent; }")
-
-        browser.page().runJavaScript(js, retry)
+    def send_prompt_to_existing_multitask(self, prompt):
+        if not self.multitask_browsers:
+            return
+        for llm in self.active_llms:
+            browser = self.multitask_browsers.get(llm["id"])
+            if browser:
+                browser.setProperty("multitask_sent", False)
+                sender = self.multitask_senders.get(llm["id"])
+                if sender is None:
+                    sender = MultitaskSender(browser, provider_name=llm["name"], parent=self)
+                    self.multitask_senders[llm["id"]] = sender
+                sender.send(prompt)
 
     def create_layout(self):
         top_bar = QHBoxLayout()
@@ -1668,7 +1635,7 @@ class ChatPanel(QWidget):
 
             if self.resize_direction in (Qt.RightSection, Qt.TopRightSection, Qt.BottomRightSection):
                 new_right = max(geom.left() + min_w - 1, geom.right() + delta.x())
-#
+            #
             if self.resize_direction in (Qt.TopSection, Qt.TopLeftSection, Qt.TopRightSection):
                 new_top = min(geom.bottom() - min_h + 1, geom.top() + delta.y())
 
